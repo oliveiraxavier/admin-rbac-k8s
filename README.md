@@ -1,4 +1,4 @@
-# Kubernetes Access Manager
+# Kubernetes Admin RBAC
 
 Painel local para criar e administrar identidades de acesso Kubernetes com permissões RBAC explícitas. O projeto não cria CRDs: usa `ServiceAccount`, `Role`, `RoleBinding` e a API `TokenRequest` nativas.
 
