@@ -1,0 +1,266 @@
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="Kube Access, início">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+      <span class="brand-name">kube<span>access</span></span>
+    </a>
+
+    <div class="cluster-label">WORKSPACE</div>
+    <div class="cluster-chip">
+      <span class="cluster-dot" [class.live]="connected()"></span>
+      <span>{{ connected() ? 'Cluster conectado' : 'Sem conexão' }}</span>
+    </div>
+
+    <div class="sidebar-rule"></div>
+    <div class="nav-caption">ACESSO</div>
+    <div class="nav-item active">
+      <span class="nav-icon key-icon" aria-hidden="true">⌘</span>
+      <span>Identidades</span>
+      @if (connected()) { <span class="nav-count">{{ identities().length }}</span> }
+    </div>
+
+    <div class="sidebar-bottom">
+      <div class="scope-card">
+        <div class="scope-icon" aria-hidden="true">◎</div>
+        <div>
+          <strong>Escopo restrito</strong>
+          <p>Somente namespaces configurados e recursos selecionados.</p>
+        </div>
+      </div>
+      <div class="sidebar-foot">KUBERNETES ACCESS CONTROL <span>v0.1</span></div>
+    </div>
+  </aside>
+
+  <main class="main-area">
+    <header class="topbar">
+      <div class="breadcrumb"><span>Workspace</span><span class="crumb-sep">/</span><strong>Identidades</strong></div>
+      <div class="topbar-actions">
+        @if (connected()) {
+          <span class="connection-state"><i></i>Conectado</span>
+          <button class="quiet-button" type="button" (click)="disconnect()">Desconectar</button>
+        } @else {
+          <label class="api-key-field">
+            <span class="sr-only">Segredo da API</span>
+            <input [(ngModel)]="apiKey" type="password" placeholder="Segredo da API" autocomplete="off" (keydown.enter)="connect()" />
+          </label>
+          <button class="connect-button" type="button" (click)="connect()" [disabled]="loading()">
+            {{ loading() ? 'Conectando...' : 'Conectar' }} <span aria-hidden="true">↗</span>
+          </button>
+        }
+      </div>
+    </header>
+
+    <section class="page-content">
+      <div class="page-heading">
+        <div>
+          <div class="eyebrow"><span class="eyebrow-mark"></span> ACCESS CONTROL / 01</div>
+          <h1>Identidades de acesso</h1>
+          <p class="heading-copy">ServiceAccounts gerenciadas, permissões visíveis e tokens com prazo definido.</p>
+        </div>
+        <button class="primary-button" type="button" (click)="beginCreate()" [disabled]="!connected()">
+          <span class="plus-icon" aria-hidden="true">+</span> Nova identidade
+        </button>
+      </div>
+
+      <div class="metrics-row">
+        <article class="metric metric-primary">
+          <div class="metric-label">IDENTIDADES GERENCIADAS <span class="metric-symbol">↗</span></div>
+          <div class="metric-value">{{ connected() ? identities().length.toString().padStart(2, '0') : '--' }}</div>
+          <div class="metric-note">ServiceAccounts sob controle do painel</div>
+        </article>
+        <article class="metric">
+          <div class="metric-label">NAMESPACES NO ESCOPO <span class="metric-symbol green">◎</span></div>
+          <div class="metric-value">{{ connected() ? namespaces().length.toString().padStart(2, '0') : '--' }}</div>
+          <div class="metric-note">Allowlist definida no backend</div>
+        </article>
+        <article class="metric metric-accent">
+          <div class="metric-label">DURAÇÃO MÁXIMA <span class="metric-symbol">◷</span></div>
+          <div class="metric-value">1<span class="metric-unit">ano</span></div>
+          <div class="metric-note">O cluster pode aplicar um prazo menor</div>
+        </article>
+      </div>
+
+      @if (errorMessage() && !formOpen() && !issueTarget() && !tokenResult()) {
+        <div class="feedback error" role="alert"><span>!</span>{{ errorMessage() }}<button type="button" aria-label="Fechar aviso" (click)="errorMessage.set('')">×</button></div>
+      }
+      @if (notice()) {
+        <div class="feedback success" role="status"><span>✓</span>{{ notice() }}<button type="button" aria-label="Fechar aviso" (click)="notice.set('')">×</button></div>
+      }
+
+      <section class="identity-section">
+        <div class="section-toolbar">
+          <div class="section-title-group">
+            <h2>Contas de serviço</h2>
+            <span class="count-pill">{{ connected() ? visibleIdentities().length : '—' }}</span>
+          </div>
+          <div class="table-actions">
+            <label class="search-field">
+              <span class="search-icon" aria-hidden="true"></span>
+              <input [ngModel]="filter()" (ngModelChange)="filter.set($event)" type="search" placeholder="Filtrar identidades" />
+            </label>
+            <button class="icon-button" type="button" (click)="refresh()" [disabled]="!connected() || loading()" title="Atualizar lista" aria-label="Atualizar lista">
+              <span class="refresh-icon" [class.spinning]="loading()" aria-hidden="true">↻</span>
+            </button>
+          </div>
+        </div>
+
+        @if (!connected()) {
+          <div class="empty-state">
+            <div class="empty-art" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h3>Conecte-se ao backend</h3>
+            <p>Informe o segredo de administração configurado no serviço para carregar as identidades gerenciadas.</p>
+          </div>
+        } @else if (loading() && identities().length === 0) {
+          <div class="empty-state"><div class="loader"></div><h3>Carregando identidades</h3></div>
+        } @else if (visibleIdentities().length === 0) {
+          <div class="empty-state">
+            <div class="empty-art quiet" aria-hidden="true"><span></span><span></span><span></span></div>
+            <h3>{{ filter() ? 'Nenhum resultado' : 'Nenhuma identidade ainda' }}</h3>
+            <p>{{ filter() ? 'Tente outro nome, namespace ou recurso.' : 'Crie a primeira ServiceAccount gerenciada para começar.' }}</p>
+            @if (!filter()) { <button class="text-action" type="button" (click)="beginCreate()">Criar identidade <span>↗</span></button> }
+          </div>
+        } @else {
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>IDENTIDADE</th>
+                  <th>NAMESPACE DA SA</th>
+                  <th>ESCOPO DE ACESSO</th>
+                  <th>ACESSO EFETIVO</th>
+                  <th>CRIADA EM</th>
+                  <th><span class="sr-only">Ações</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (identity of visibleIdentities(); track trackIdentity($index, identity)) {
+                  <tr>
+                    <td>
+                      <div class="identity-name"><span class="identity-glyph">SA</span><div><strong>{{ identity.name }}</strong><small>ServiceAccount</small></div></div>
+                    </td>
+                    <td><span class="namespace-tag">{{ identity.namespace }}</span></td>
+                    <td><div class="namespace-tags">@for (scope of identity.namespaces; track scope) { <span class="namespace-tag">{{ scope }}</span> }</div></td>
+                    <td>
+                      <div class="access-summary">{{ summarize(identity) }}</div>
+                      <div class="permission-tags">
+                        @for (permission of identity.permissions; track permission.apiGroup + '/' + permission.resource) {
+                          <span>{{ permission.resource }}</span>
+                        }
+                      </div>
+                    </td>
+                    <td><span class="date-cell">{{ identity.createdAt | date: 'dd MMM yyyy' }}</span></td>
+                    <td>
+                      <div class="row-actions">
+                        <button class="row-action issue-action" type="button" (click)="beginIssue(identity)" title="Emitir novo token" aria-label="Emitir novo token">↗</button>
+                        <button class="row-action" type="button" (click)="beginEdit(identity)" title="Editar permissões" aria-label="Editar permissões">✎</button>
+                        <button class="row-action delete-action" type="button" (click)="deleteIdentity(identity)" title="Excluir identidade" aria-label="Excluir identidade">×</button>
+                      </div>
+                    </td>
+                  </tr>
+                }
+              </tbody>
+            </table>
+          </div>
+          <div class="table-footer"><span>Exibindo {{ visibleIdentities().length }} de {{ identities().length }} identidades</span><span><i></i> Permissões limitadas aos namespaces selecionados</span></div>
+        }
+      </section>
+
+      <footer class="page-footer"><span>RBAC VISUALIZADO DIRETAMENTE DO CLUSTER</span><span>API v1 <b>·</b> TOKENREQUEST</span></footer>
+    </section>
+  </main>
+</div>
+
+@if (formOpen()) {
+  <div class="overlay" (click)="closeForm()">
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="form-title" (click)="$event.stopPropagation()">
+      <header class="drawer-header">
+        <div><div class="eyebrow"><span class="eyebrow-mark"></span> {{ editingIdentity ? 'UPDATE ACCESS' : 'NEW ACCESS' }}</div><h2 id="form-title">{{ editingIdentity ? 'Editar permissões' : 'Nova identidade' }}</h2></div>
+        <button class="icon-button close-button" type="button" (click)="closeForm()" aria-label="Fechar">×</button>
+      </header>
+
+      <div class="drawer-content">
+        @if (formError()) { <div class="drawer-error" role="alert"><span>{{ formError() }}</span><button type="button" aria-label="Fechar erro" (click)="formError.set('')">×</button></div> }
+        <div class="form-grid">
+          <label class="form-field"><span>Nome da identidade</span><input [(ngModel)]="name" [disabled]="!!editingIdentity" maxlength="50" placeholder="ex: dashboard-reader" /></label>
+          <label class="form-field"><span>Namespace da ServiceAccount</span><select [(ngModel)]="namespace" [disabled]="!!editingIdentity"><option value="" disabled>Selecione</option>@for (item of namespaces(); track item) { <option [value]="item">{{ item }}</option> }</select></label>
+        </div>
+
+        <section class="scope-picker" aria-labelledby="scope-title">
+          <div class="scope-picker-heading"><div><h3 id="scope-title">Namespaces com acesso</h3><p>A mesma matriz de permissões será aplicada em cada namespace.</p></div><span class="selection-badge">{{ targetNamespaces.length }} selecionados</span></div>
+          <button class="scope-select-trigger" type="button" [attr.aria-expanded]="namespaceMenuOpen()" aria-controls="namespace-options" (click)="toggleNamespaceMenu()"><span>{{ namespaceSummary() }}</span><span class="scope-chevron" aria-hidden="true">⌄</span></button>
+          @if (namespaceMenuOpen()) {
+            <div class="scope-dropdown" id="namespace-options" role="group" aria-label="Namespaces com acesso" (click)="$event.stopPropagation()">
+              @for (item of namespaces(); track item) {
+                <label class="scope-option"><input type="checkbox" [checked]="hasTargetNamespace(item)" (change)="toggleTargetNamespace(item, $event)" /><span>{{ item }}</span></label>
+              }
+            </div>
+          }
+        </section>
+
+        @if (!editingIdentity) {
+          <label class="form-field duration-field"><span>Duração do token</span><div class="input-suffix"><input [(ngModel)]="ttlValue" type="number" min="1" [max]="maxDuration(ttlUnit)" /><select [(ngModel)]="ttlUnit" aria-label="Unidade da duração"><option value="hours">horas</option><option value="days">dias</option></select></div><small>Máximo solicitado: 365 dias. O cluster pode aplicar um prazo menor.</small></label>
+        }
+
+        <div class="permissions-heading"><div><h3>Permissões RBAC</h3><p>Escolha recursos e verbos permitidos.</p></div><span class="selection-badge">{{ selectionCount() }} selecionados</span></div>
+        <div class="permission-table-wrap">
+          <table class="permission-table">
+            <colgroup><col class="resource-column" /><col span="5" /></colgroup>
+            <thead><tr><th>RECURSO</th>@for (verb of verbs; track verb) { <th><label class="verb-select-all"><input type="checkbox" [checked]="allVerbSelected(verb)" [indeterminate]="someVerbSelected(verb)" (change)="toggleAllVerb(verb, $event)" [attr.aria-label]="'Selecionar todos para ' + verb" /><span></span><span>{{ verb }}</span></label></th> }</tr></thead>
+            <tbody>
+              @for (option of permissions; track option.apiGroup + '/' + option.resource) {
+                <tr [class.secret-row]="option.resource === 'secrets'">
+                  <td>
+                    <div class="resource-label"><strong>{{ option.label }}</strong><small>{{ option.detail }}</small></div>
+                    @if (option.resource === 'secrets') {
+                      <label class="secret-access-mode"><input type="checkbox" [checked]="option.allSecrets" (change)="toggleSecretScope(option, $event)" /><span>Todos as Secrets, incluindo as que serão criadas posteriormente</span></label>
+                      @if (!option.allSecrets) {
+                        <label class="secret-name-field"><span>Nomes exatos, separados por vírgula</span><input [(ngModel)]="option.resourceNamesInput" type="text" autocomplete="off" placeholder="db-credentials, api-key" /></label>
+                      }
+                    }
+                  </td>
+                  @for (verb of verbs; track verb) {
+                    <td><label class="check-cell"><input type="checkbox" [checked]="hasVerb(option, verb)" [disabled]="!canSelectVerb(option, verb)" (change)="togglePermission(option, verb, $event)" [attr.aria-label]="verb + ' ' + option.resource" /><span></span></label></td>
+                  }
+                </tr>
+              }
+            </tbody>
+          </table>
+        </div>
+
+        <div class="read-only-note"><span aria-hidden="true">◉</span><p><strong>Atenção aos privilégios</strong> — `Exec em Pods` permite executar comandos nos contêineres e `delete` remove Pods nos namespaces selecionados. Secrets também são sensíveis: por nomes, permitem apenas `get`; para todos, permitem listar e ler Secrets atuais e futuras. Outros verbos de escrita e acesso cluster-wide não estão disponíveis.</p></div>
+      </div>
+
+      <footer class="drawer-footer"><button class="quiet-button" type="button" (click)="closeForm()">Cancelar</button><button class="primary-button" type="button" (click)="saveIdentity()" [disabled]="busy()">{{ busy() ? 'Salvando...' : editingIdentity ? 'Salvar permissões' : 'Criar identidade' }} <span aria-hidden="true">↗</span></button></footer>
+    </section>
+  </div>
+}
+
+@if (issueTarget(); as target) {
+  <div class="overlay centered-overlay" (click)="issueTarget.set(null)">
+    <section class="token-dialog issue-dialog" role="dialog" aria-modal="true" aria-labelledby="issue-title" (click)="$event.stopPropagation()">
+      <button class="icon-button dialog-close" type="button" (click)="issueTarget.set(null)" aria-label="Fechar">×</button>
+      <div class="token-emblem" aria-hidden="true">↗</div>
+      <div class="eyebrow centered-eyebrow"><span class="eyebrow-mark"></span> ROTACIONAR CREDENCIAL</div>
+      <h2 id="issue-title">Novo token</h2>
+      @if (issueError()) { <div class="drawer-error" role="alert"><span>{{ issueError() }}</span><button type="button" aria-label="Fechar erro" (click)="issueError.set('')">×</button></div> }
+      <p class="dialog-copy">Para <strong>{{ target.name }}</strong> com acesso em <strong>{{ target.namespaces.join(', ') }}</strong>.</p>
+      <label class="form-field issue-duration"><span>Duração</span><div class="input-suffix"><input [(ngModel)]="issueDuration" type="number" min="1" [max]="maxDuration(issueUnit)" /><select [(ngModel)]="issueUnit" aria-label="Unidade da duração"><option value="hours">horas</option><option value="days">dias</option></select></div><small>Máximo solicitado: 365 dias; o cluster pode limitar.</small></label>
+      <button class="primary-button full-button" type="button" (click)="issueToken()" [disabled]="busy()">{{ busy() ? 'Emitindo...' : 'Emitir token' }} <span aria-hidden="true">↗</span></button>
+    </section>
+  </div>
+}
+
+@if (tokenResult(); as result) {
+  <div class="overlay centered-overlay" (click)="closeToken()">
+    <section class="token-dialog" role="dialog" aria-modal="true" aria-labelledby="token-title" (click)="$event.stopPropagation()">
+      <button class="icon-button dialog-close" type="button" (click)="closeToken()" aria-label="Fechar">×</button>
+      <div class="token-emblem" aria-hidden="true">✓</div>
+      <div class="eyebrow centered-eyebrow"><span class="eyebrow-mark"></span> CREDENCIAL EMITIDA</div>
+      <h2 id="token-title">Copie seu token</h2>
+      <p class="dialog-copy">Este valor será exibido apenas agora. Guarde-o em um local seguro.</p>
+      <div class="token-box"><code>{{ result.token }}</code><button class="copy-button" type="button" (click)="copyToken()" title="Copiar token" aria-label="Copiar token">▢</button></div>
+      <div class="token-expiry"><span>IDENTIDADE</span><strong>{{ result.identity.name }} · {{ result.identity.namespace }}</strong><span>NAMESPACES</span><strong>{{ result.identity.namespaces.join(', ') }}</strong><span>EXPIRA EM</span><strong>{{ result.expiresAt | date: 'dd/MM/yyyy HH:mm' }}</strong></div>
+      <button class="primary-button full-button" type="button" (click)="closeToken()">Concluir <span aria-hidden="true">✓</span></button>
+    </section>
+  </div>
+}

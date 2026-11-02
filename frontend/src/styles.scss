@@ -1,0 +1,25 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+:root {
+	color-scheme: light;
+	font-family: 'DM Sans', 'Segoe UI', sans-serif;
+	font-synthesis: none;
+	text-rendering: optimizeLegibility;
+	--ink: #1d2927;
+	--muted: #75817d;
+	--line: #e2e8e4;
+	--paper: #f3f6f2;
+	--surface: #ffffff;
+  --forest: #660099;
+	--forest-dark: #3f005e;
+	--lime: #d8f16a;
+	--coral: #e56c51;
+	--mono: 'IBM Plex Mono', 'SFMono-Regular', Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; margin: 0; }
+body { background: var(--paper); color: var(--ink); }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #9ed1b8; outline-offset: 2px; }

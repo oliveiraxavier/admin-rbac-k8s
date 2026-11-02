@@ -1,0 +1,440 @@
+import { HttpErrorResponse } from '@angular/common/http';
+import { DatePipe } from '@angular/common';
+import { Component, signal } from '@angular/core';
+import { FormsModule } from '@angular/forms';
+import { AccessApi, Identity, IssuedToken } from './access-api';
+
+interface PermissionOption {
+  apiGroup: string;
+  resource: string;
+  label: string;
+  detail: string;
+  selected: Record<string, boolean>;
+  resourceNames: string[];
+  resourceNamesInput: string;
+  allSecrets: boolean;
+}
+
+type DurationUnit = 'hours' | 'days';
+
+const MAX_TOKEN_TTL_DAYS = 365;
+const MIN_TOKEN_TTL_SECONDS = 600;
+
+@Component({
+  imports: [DatePipe, FormsModule],
+  selector: 'app-root',
+  styleUrl: './app.scss',
+  templateUrl: './app.html',
+})
+export class App {
+  protected readonly connected = signal(false);
+  protected readonly loading = signal(false);
+  protected readonly busy = signal(false);
+  protected readonly identities = signal<Identity[]>([]);
+  protected readonly namespaces = signal<string[]>([]);
+  protected readonly formOpen = signal(false);
+  protected readonly namespaceMenuOpen = signal(false);
+  protected readonly tokenResult = signal<IssuedToken | null>(null);
+  protected readonly issueTarget = signal<Identity | null>(null);
+  protected readonly errorMessage = signal('');
+  protected readonly formError = signal('');
+  protected readonly issueError = signal('');
+  protected readonly notice = signal('');
+  protected readonly filter = signal('');
+  protected apiKey = '';
+  protected name = '';
+  protected namespace = '';
+  protected targetNamespaces: string[] = [];
+  protected ttlValue = 8;
+  protected ttlUnit: DurationUnit = 'hours';
+  protected issueDuration = 8;
+  protected issueUnit: DurationUnit = 'hours';
+  protected editingIdentity: Identity | null = null;
+  protected permissions: PermissionOption[] = [];
+
+  private readonly resourceCatalog = [
+    { apiGroup: '', resource: 'pods', label: 'Pods', detail: 'Contêineres e workloads' },
+    { apiGroup: '', resource: 'pods/log', label: 'Logs de Pods', detail: 'Ler stdout/stderr' },
+    {
+      apiGroup: '',
+      resource: 'pods/exec',
+      label: 'Exec em Pods',
+      detail: 'Executar comandos no contêiner',
+    },
+    {
+      apiGroup: '',
+      resource: 'secrets',
+      label: 'Secrets',
+      detail: 'Secrets de configuração e credenciais',
+    },
+    { apiGroup: '', resource: 'services', label: 'Services', detail: 'Serviços de rede' },
+    {
+      apiGroup: 'apps',
+      resource: 'deployments',
+      label: 'Deployments',
+      detail: 'Aplicações implantadas',
+    },
+    {
+      apiGroup: 'apps',
+      resource: 'replicasets',
+      label: 'ReplicaSets',
+      detail: 'Réplicas de workloads',
+    },
+    { apiGroup: 'batch', resource: 'jobs', label: 'Jobs', detail: 'Execuções pontuais' },
+    { apiGroup: 'batch', resource: 'cronjobs', label: 'CronJobs', detail: 'Execuções agendadas' },
+  ];
+  protected readonly verbs = ['get', 'list', 'watch', 'create', 'delete'];
+
+  constructor(private readonly api: AccessApi) {}
+
+  protected async connect(): Promise<void> {
+    const token = this.apiKey.trim();
+    if (!token) {
+      this.errorMessage.set('Informe o segredo da API.');
+      return;
+    }
+    this.errorMessage.set('');
+    this.loading.set(true);
+    this.api.connect(token);
+    try {
+      const [namespaces, identities] = await Promise.all([this.api.namespaces(), this.api.list()]);
+      this.namespaces.set(namespaces);
+      this.identities.set(identities);
+      this.connected.set(true);
+      this.apiKey = '';
+    } catch (error) {
+      this.api.disconnect();
+      this.errorMessage.set(this.describeError(error));
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
+  protected disconnect(): void {
+    this.api.disconnect();
+    this.connected.set(false);
+    this.identities.set([]);
+    this.namespaces.set([]);
+    this.apiKey = '';
+    this.tokenResult.set(null);
+    this.formOpen.set(false);
+    this.issueTarget.set(null);
+    this.errorMessage.set('');
+    this.formError.set('');
+    this.issueError.set('');
+  }
+
+  protected async refresh(): Promise<void> {
+    this.loading.set(true);
+    this.errorMessage.set('');
+    try {
+      this.identities.set(await this.api.list());
+      this.notice.set('Lista atualizada.');
+    } catch (error) {
+      this.errorMessage.set(this.describeError(error));
+    } finally {
+      this.loading.set(false);
+    }
+  }
+
+  protected visibleIdentities(): Identity[] {
+    const query = this.filter().trim().toLowerCase();
+    if (!query) return this.identities();
+    return this.identities().filter((identity) =>
+      `${identity.name} ${identity.namespace} ${identity.namespaces.join(' ')} ${identity.permissions.map((item) => item.resource).join(' ')}`
+        .toLowerCase()
+        .includes(query),
+    );
+  }
+
+  protected beginCreate(): void {
+    this.namespaceMenuOpen.set(false);
+    this.editingIdentity = null;
+    this.name = '';
+    this.namespace = this.namespaces()[0] ?? '';
+    this.targetNamespaces = this.namespace ? [this.namespace] : [];
+    this.ttlValue = 8;
+    this.ttlUnit = 'hours';
+    this.permissions = this.resourceCatalog.map((resource) => ({
+      ...resource,
+      selected: { get: false, list: false, watch: false, create: false, delete: false },
+      resourceNames: [],
+      resourceNamesInput: '',
+      allSecrets: false,
+    }));
+    this.errorMessage.set('');
+    this.formError.set('');
+    this.formOpen.set(true);
+  }
+
+  protected beginEdit(identity: Identity): void {
+    this.namespaceMenuOpen.set(false);
+    this.editingIdentity = identity;
+    this.name = identity.name;
+    this.namespace = identity.namespace;
+    this.targetNamespaces = [...identity.namespaces];
+    this.permissions = this.resourceCatalog.map((resource) => {
+      const assigned = identity.permissions.find(
+        (item) => item.apiGroup === resource.apiGroup && item.resource === resource.resource,
+      );
+      return {
+        ...resource,
+        selected: Object.fromEntries(
+          this.verbs.map((verb) => [verb, assigned?.verbs.includes(verb) ?? false]),
+        ),
+        resourceNames: assigned?.resourceNames ?? [],
+        resourceNamesInput: assigned?.resourceNames?.join(', ') ?? '',
+        allSecrets:
+          resource.resource === 'secrets' &&
+          assigned !== undefined &&
+          !assigned.resourceNames?.length,
+      };
+    });
+    this.errorMessage.set('');
+    this.formError.set('');
+    this.formOpen.set(true);
+  }
+
+  protected closeForm(): void {
+    this.formOpen.set(false);
+    this.namespaceMenuOpen.set(false);
+    this.formError.set('');
+  }
+
+  protected toggleNamespaceMenu(): void {
+    this.namespaceMenuOpen.update((open) => !open);
+  }
+
+  protected namespaceSummary(): string {
+    if (this.targetNamespaces.length === 0) return 'Selecione namespaces';
+    if (this.targetNamespaces.length <= 2) return this.targetNamespaces.join(', ');
+    return `${this.targetNamespaces.length} namespaces selecionados`;
+  }
+
+  protected togglePermission(option: PermissionOption, verb: string, event: Event): void {
+    option.selected[verb] = (event.target as HTMLInputElement).checked;
+  }
+
+  protected hasVerb(option: PermissionOption, verb: string): boolean {
+    return option.selected[verb] ?? false;
+  }
+
+  protected canSelectVerb(option: PermissionOption, verb: string): boolean {
+    return (
+      (option.resource !== 'pods/exec' || verb === 'create') &&
+      (verb !== 'create' || option.resource === 'pods/exec') &&
+      (verb !== 'delete' || option.resource === 'pods') &&
+      (option.resource !== 'pods/log' || verb === 'get') &&
+      (option.resource !== 'secrets' || option.allSecrets || verb === 'get')
+    );
+  }
+
+  protected toggleSecretScope(option: PermissionOption, event: Event): void {
+    option.allSecrets = (event.target as HTMLInputElement).checked;
+    if (!option.allSecrets) {
+      option.selected['list'] = false;
+      option.selected['watch'] = false;
+    }
+  }
+
+  protected allVerbSelected(verb: string): boolean {
+    const applicable = this.permissions.filter((option) => this.canSelectVerb(option, verb));
+    return applicable.length > 0 && applicable.every((option) => this.hasVerb(option, verb));
+  }
+
+  protected someVerbSelected(verb: string): boolean {
+    return (
+      this.permissions.some(
+        (option) => this.canSelectVerb(option, verb) && this.hasVerb(option, verb),
+      ) && !this.allVerbSelected(verb)
+    );
+  }
+
+  protected toggleAllVerb(verb: string, event: Event): void {
+    const selected = (event.target as HTMLInputElement).checked;
+    for (const option of this.permissions) {
+      if (this.canSelectVerb(option, verb)) option.selected[verb] = selected;
+    }
+  }
+
+  protected hasTargetNamespace(namespace: string): boolean {
+    return this.targetNamespaces.includes(namespace);
+  }
+
+  protected toggleTargetNamespace(namespace: string, event: Event): void {
+    const checked = (event.target as HTMLInputElement).checked;
+    this.targetNamespaces = checked
+      ? [...this.targetNamespaces, namespace]
+      : this.targetNamespaces.filter((item) => item !== namespace);
+  }
+
+  protected selectionCount(): number {
+    return this.permissions.filter((option) => Object.values(option.selected).some(Boolean)).length;
+  }
+
+  protected maxDuration(unit: DurationUnit): number {
+    return unit === 'days' ? MAX_TOKEN_TTL_DAYS : MAX_TOKEN_TTL_DAYS * 24;
+  }
+
+  private durationInSeconds(value: number, unit: DurationUnit): number {
+    return Number(value) * (unit === 'days' ? 24 * 60 * 60 : 60 * 60);
+  }
+
+  protected async saveIdentity(): Promise<void> {
+    const selected = this.permissions
+      .map((option) => ({
+        ...option,
+        verbs: this.verbs.filter((verb) => option.selected[verb]),
+        resourceNames:
+          option.resource === 'secrets'
+            ? option.resourceNamesInput
+                .split(',')
+                .map((name) => name.trim())
+                .filter(Boolean)
+            : [],
+      }))
+      .filter((option) => option.verbs.length > 0)
+      .map(({ apiGroup, resource, verbs, resourceNames, allSecrets }) => ({
+        apiGroup,
+        resource,
+        verbs,
+        ...(resource === 'secrets' && !allSecrets ? { resourceNames } : {}),
+      }));
+    if (selected.length === 0) {
+      this.formError.set('Selecione ao menos um recurso e verbo.');
+      return;
+    }
+    if (
+      selected.some(
+        (permission) =>
+          permission.resource === 'secrets' &&
+          permission.resourceNames !== undefined &&
+          permission.resourceNames.length === 0,
+      )
+    ) {
+      this.formError.set('Informe os nomes específicos das Secrets que poderão ser lidos.');
+      return;
+    }
+    if (this.targetNamespaces.length === 0) {
+      this.formError.set('Selecione ao menos um namespace de acesso.');
+      return;
+    }
+    const ttlSeconds = this.durationInSeconds(this.ttlValue, this.ttlUnit);
+    if (
+      !Number.isInteger(ttlSeconds) ||
+      ttlSeconds < MIN_TOKEN_TTL_SECONDS ||
+      ttlSeconds > MAX_TOKEN_TTL_DAYS * 24 * 60 * 60
+    ) {
+      this.formError.set('A duração deve estar entre 1 hora e 365 dias.');
+      return;
+    }
+    this.busy.set(true);
+    this.formError.set('');
+    try {
+      if (this.editingIdentity) {
+        await this.api.update(this.editingIdentity, this.targetNamespaces, selected);
+        this.notice.set('Permissões atualizadas.');
+        this.formOpen.set(false);
+        await this.refresh();
+      } else {
+        const result = await this.api.create({
+          name: this.name.trim(),
+          namespace: this.namespace,
+          targetNamespaces: this.targetNamespaces,
+          ttlSeconds,
+          permissions: selected,
+        });
+        this.formOpen.set(false);
+        this.tokenResult.set(result);
+        await this.refresh();
+      }
+    } catch (error) {
+      this.formError.set(this.describeError(error));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  protected async deleteIdentity(identity: Identity): Promise<void> {
+    if (
+      !window.confirm(
+        `Excluir ${identity.name} em ${identity.namespace}? O token deixará de funcionar.`,
+      )
+    )
+      return;
+    this.busy.set(true);
+    this.errorMessage.set('');
+    try {
+      await this.api.remove(identity);
+      this.identities.update((items) =>
+        items.filter(
+          (item) => item.name !== identity.name || item.namespace !== identity.namespace,
+        ),
+      );
+      this.notice.set('Identidade removida.');
+    } catch (error) {
+      this.errorMessage.set(this.describeError(error));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  protected beginIssue(identity: Identity): void {
+    this.issueTarget.set(identity);
+    this.issueDuration = 8;
+    this.issueUnit = 'hours';
+    this.errorMessage.set('');
+    this.issueError.set('');
+  }
+
+  protected async issueToken(): Promise<void> {
+    const target = this.issueTarget();
+    if (!target) return;
+    const ttlSeconds = this.durationInSeconds(this.issueDuration, this.issueUnit);
+    if (
+      !Number.isInteger(ttlSeconds) ||
+      ttlSeconds < MIN_TOKEN_TTL_SECONDS ||
+      ttlSeconds > MAX_TOKEN_TTL_DAYS * 24 * 60 * 60
+    ) {
+      this.issueError.set('A duração deve estar entre 1 hora e 365 dias.');
+      return;
+    }
+    this.busy.set(true);
+    this.issueError.set('');
+    try {
+      this.tokenResult.set(await this.api.issue(target, ttlSeconds));
+      this.issueTarget.set(null);
+    } catch (error) {
+      this.issueError.set(this.describeError(error));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  protected closeToken(): void {
+    this.tokenResult.set(null);
+  }
+
+  protected async copyToken(): Promise<void> {
+    const token = this.tokenResult()?.token;
+    if (!token) return;
+    await navigator.clipboard.writeText(token);
+    this.notice.set('Token copiado.');
+  }
+
+  protected summarize(identity: Identity): string {
+    const resources = identity.permissions.length;
+    return `${resources} ${resources === 1 ? 'recurso' : 'recursos'} · ${identity.permissions.some((item) => item.verbs.some((verb) => verb !== 'get')) ? 'leitura ampliada' : 'somente get'}`;
+  }
+
+  protected trackIdentity(_index: number, identity: Identity): string {
+    return `${identity.namespace}/${identity.name}`;
+  }
+
+  private describeError(error: unknown): string {
+    if (error instanceof HttpErrorResponse) {
+      return error.error?.error ?? `Falha na API (${error.status || 'rede'}).`;
+    }
+    return error instanceof Error ? error.message : 'Não foi possível concluir a operação.';
+  }
+}
