@@ -14,14 +14,18 @@
 - Trate tokens, kubeconfigs e variáveis secretas como credenciais: não os imprima, registre em logs, inclua em exemplos reais ou grave no frontend.
 - Siga os padrões e a arquitetura existentes; o projeto usa recursos Kubernetes nativos, sem CRD.
 
-## Backend Go
+## Setup and commands
+
+### Backend Go
+
+1 . Setup and commands
 
 - Execute comandos Go a partir de `backend/`.
 - Após mudanças no backend, rode `go test ./...`.
 - Rode `go mod tidy` somente quando alterar dependências, também a partir de `backend/`.
 - Não aumente nem reduza a versão de Go sem autorização.
 
-## Frontend Angular
+### Frontend Angular
 
 - Execute comandos Node a partir de `frontend/` e rode `nvm use` antes deles.
 - Após mudanças no frontend, rode `npm run build`; use `npm test` quando alterar comportamento coberto por testes.

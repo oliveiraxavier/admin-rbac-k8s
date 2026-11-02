@@ -231,10 +231,8 @@ export class App {
 
   protected toggleSecretScope(option: PermissionOption, event: Event): void {
     option.allSecrets = (event.target as HTMLInputElement).checked;
-    if (!option.allSecrets) {
-      option.selected['list'] = false;
-      option.selected['watch'] = false;
-    }
+    option.selected['list'] = option.allSecrets;
+    option.selected['watch'] = option.allSecrets;
   }
 
   protected allVerbSelected(verb: string): boolean {
@@ -252,6 +250,10 @@ export class App {
 
   protected toggleAllVerb(verb: string, event: Event): void {
     const selected = (event.target as HTMLInputElement).checked;
+    if (selected && (verb === 'list' || verb === 'watch')) {
+      const secrets = this.permissions.find((option) => option.resource === 'secrets');
+      if (secrets) secrets.allSecrets = true;
+    }
     for (const option of this.permissions) {
       if (this.canSelectVerb(option, verb)) option.selected[verb] = selected;
     }

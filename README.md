@@ -20,7 +20,7 @@ Painel local para criar e administrar identidades de acesso Kubernetes com permi
 
 ## Verbos e subrecursos
 
-- `get` lê um objeto específico; `list` enumera objetos; `watch` acompanha mudanças em tempo real. O token pode ler os valores completos dos Secrets nomeados; `list`, `watch`, nomes wildcard e nomes não informados são rejeitados.
+- `get` lê um objeto específico; `list` enumera objetos; `watch` acompanha mudanças em tempo real. O token pode ler os valores completos das Secrets nomeados; `list`, `watch`, nomes wildcard e nomes não informados são rejeitados.
 - Logs são um subrecurso: o painel permite `get` em `pods/log`. Isso concede a ferramentas que usam o token a leitura dos logs no namespace escolhido; o painel ainda não tem uma tela própria de visualização de logs.
 - `kubectl exec` acessa o subrecurso `pods/exec` e normalmente requer `create` nesse subrecurso (alguns clientes/transportes podem exigir `get`). Isso permite executar comandos dentro do container e não é equivalente a criar um Pod.
 - A leitura ampla de Secrets e `pods/exec` continuam bloqueados pela allowlist do backend. Mesmo o `get` nominal de Secrets expõe valores sensíveis; use apenas para identidades específicas e namespaces necessários.
