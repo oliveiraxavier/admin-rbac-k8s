@@ -1,7 +1,8 @@
-package main
+package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -20,6 +22,75 @@ func TestAuthenticationRequired(t *testing.T) {
 	app.routes().ServeHTTP(response, request)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, response.Code)
+	}
+}
+
+func TestOpenAPIDocumentationRoutes(t *testing.T) {
+	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+
+	request := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	response := httptest.NewRecorder()
+	app.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected OpenAPI status %d, got %d", http.StatusOK, response.Code)
+	}
+	if contentType := response.Header().Get("Content-Type"); contentType != "application/yaml; charset=utf-8" {
+		t.Fatalf("expected YAML content type, got %q", contentType)
+	}
+	if !strings.Contains(response.Body.String(), "openapi: 3.0.3") {
+		t.Fatal("expected OpenAPI 3 document")
+	}
+	jsonSpec, err := utilyaml.ToJSON(openAPISpec)
+	if err != nil {
+		t.Fatalf("expected valid OpenAPI YAML, got error: %v", err)
+	}
+	var document struct {
+		OpenAPI string                     `json:"openapi"`
+		Paths   map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(jsonSpec, &document); err != nil {
+		t.Fatalf("decode OpenAPI document: %v", err)
+	}
+	if document.OpenAPI != "3.0.3" || len(document.Paths) == 0 {
+		t.Fatalf("expected OpenAPI 3.0.3 with paths, got version %q and %d paths", document.OpenAPI, len(document.Paths))
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/docs", nil)
+	response = httptest.NewRecorder()
+	app.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected Swagger UI status %d, got %d", http.StatusOK, response.Code)
+	}
+	if !strings.Contains(response.Body.String(), "/openapi.yaml") {
+		t.Fatal("expected Swagger UI to load the OpenAPI document")
+	}
+}
+
+func TestValidateNamespaceTargets(t *testing.T) {
+	allowedNamespaces := map[string]struct{}{"team-a": {}, "team-b": {}}
+	testCases := []struct {
+		name       string
+		namespaces []string
+		wantError  string
+	}{
+		{name: "allowed namespaces", namespaces: []string{"team-a", "team-b"}},
+		{name: "empty selection", wantError: "select at least one allowed namespace"},
+		{name: "namespace outside allowlist", namespaces: []string{"team-c"}, wantError: "namespace is not allowed"},
+		{name: "duplicate namespace", namespaces: []string{"team-a", "team-a"}, wantError: "target namespaces must be unique"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := validateNamespaceTargets(testCase.namespaces, allowedNamespaces)
+			if testCase.wantError == "" {
+				if err != nil {
+					t.Fatalf("expected valid namespaces, got error: %v", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != testCase.wantError {
+				t.Fatalf("expected error %q, got %v", testCase.wantError, err)
+			}
+		})
 	}
 }
 

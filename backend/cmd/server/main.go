@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"k8s-admin-rbac/internal/api"
+
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -33,10 +35,9 @@ func main() {
 		log.Fatalf("create Kubernetes client: %v", err)
 	}
 
-	app := newAPI(client, adminToken, namespaces)
 	server := &http.Server{
 		Addr:              envOr("LISTEN_ADDR", "127.0.0.1:8080"),
-		Handler:           app.routes(),
+		Handler:           api.NewHandler(client, adminToken, namespaces),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("Kubernetes access manager listening on %s", server.Addr)

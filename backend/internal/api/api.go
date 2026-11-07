@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"crypto/subtle"
@@ -17,33 +17,8 @@ type api struct {
 	namespaces map[string]struct{}
 }
 
-type permission struct {
-	APIGroup      string   `json:"apiGroup"`
-	Resource      string   `json:"resource"`
-	Verbs         []string `json:"verbs"`
-	ResourceNames []string `json:"resourceNames,omitempty"`
-}
-
-type identity struct {
-	Name        string       `json:"name"`
-	Namespace   string       `json:"namespace"`
-	Namespaces  []string     `json:"namespaces"`
-	CreatedAt   metav1.Time  `json:"createdAt"`
-	Permissions []permission `json:"permissions"`
-}
-
-type createRequest struct {
-	Name             string       `json:"name"`
-	Namespace        string       `json:"namespace"`
-	TargetNamespaces []string     `json:"targetNamespaces"`
-	TTLSeconds       *int64       `json:"ttlSeconds"`
-	Permissions      []permission `json:"permissions"`
-}
-
-type tokenResponse struct {
-	Identity identity `json:"identity"`
-	Token    string   `json:"token"`
-	Expires  string   `json:"expiresAt"`
+func NewHandler(client kubernetes.Interface, token string, namespaces []string) http.Handler {
+	return newAPI(client, token, namespaces).routes()
 }
 
 func newAPI(client kubernetes.Interface, token string, namespaces []string) *api {
@@ -59,6 +34,8 @@ func (a *api) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
+	mux.HandleFunc("GET /openapi.yaml", openAPIDocument)
+	mux.HandleFunc("GET /docs", swaggerUI)
 	mux.Handle("GET /api/v1/namespaces", a.authenticate(http.HandlerFunc(a.listNamespaces)))
 	mux.Handle("/api/v1/tokens", a.authenticate(http.HandlerFunc(a.collection)))
 	mux.Handle("/api/v1/tokens/", a.authenticate(http.HandlerFunc(a.item)))
@@ -183,8 +160,8 @@ func (a *api) issueToken(w http.ResponseWriter, r *http.Request, namespace, name
 		return
 	}
 	ttlSeconds := tokenTTL(request.TTLSeconds)
-	if ttlSeconds < minimumTTL || ttlSeconds > maximumTTL {
-		writeError(w, http.StatusBadRequest, "ttlSeconds must be between 600 and 31536000") //
+	if err := validateTokenTTL(ttlSeconds); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	ctx := r.Context()

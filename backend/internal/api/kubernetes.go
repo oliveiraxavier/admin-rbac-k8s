@@ -1,4 +1,4 @@
-package main
+package api
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"regexp"
 	"slices"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
@@ -23,17 +21,7 @@ const (
 	managedValue    = "k8s-access-manager"
 	roleAnnotation  = "k8s-access-manager/role"
 	managedSelector = managedLabel + "=" + managedValue
-	minimumTTL      = int64(600)
-	maximumTTL      = int64(365 * 24 * 60 * 60)
 )
-
-var identityNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
-
-var allowedResources = map[string][]string{
-	"":      {"pods", "pods/log", "pods/exec", "secrets", "services"},
-	"apps":  {"deployments", "replicasets"},
-	"batch": {"jobs", "cronjobs"},
-}
 
 func (a *api) allowedNamespace(namespace string) bool {
 	_, ok := a.namespaces[namespace]
@@ -149,26 +137,6 @@ func tokenTTL(requested *int64) int64 {
 	return *requested
 }
 
-func (a *api) validateTargetNamespaces(w http.ResponseWriter, namespaces []string) bool {
-	if len(namespaces) == 0 || len(namespaces) > len(a.namespaces) {
-		writeError(w, http.StatusBadRequest, "select at least one allowed namespace")
-		return false
-	}
-	seen := make(map[string]struct{}, len(namespaces))
-	for _, namespace := range namespaces {
-		if !a.allowedNamespace(namespace) {
-			writeError(w, http.StatusBadRequest, "namespace is not allowed")
-			return false
-		}
-		if _, exists := seen[namespace]; exists {
-			writeError(w, http.StatusBadRequest, "target namespaces must be unique")
-			return false
-		}
-		seen[namespace] = struct{}{}
-	}
-	return true
-}
-
 func (a *api) createScope(ctx context.Context, name, identityNamespace, targetNamespace string, permissions []permission) (*rbacv1.RoleBinding, *rbacv1.Role, error) {
 	labels := map[string]string{managedLabel: managedValue}
 	role := &rbacv1.Role{
@@ -195,84 +163,6 @@ func (a *api) createScope(ctx context.Context, name, identityNamespace, targetNa
 func (a *api) deleteCreatedScope(ctx context.Context, name, identityNamespace, targetNamespace string) {
 	_ = a.client.RbacV1().RoleBindings(targetNamespace).Delete(ctx, scopedBindingName(name, identityNamespace), metav1.DeleteOptions{})
 	_ = a.client.RbacV1().Roles(targetNamespace).Delete(ctx, scopedRoleName(name, identityNamespace), metav1.DeleteOptions{})
-}
-
-func (a *api) validate(w http.ResponseWriter, name, namespace string, ttl int64, permissions []permission) bool {
-	if !a.allowedNamespace(namespace) {
-		writeError(w, http.StatusBadRequest, "namespace is not allowed")
-		return false
-	}
-	if len(name) > 50 || !identityNamePattern.MatchString(name) {
-		writeError(w, http.StatusBadRequest, "name must be a DNS label of at most 50 characters")
-		return false
-	}
-	if ttl < minimumTTL || ttl > maximumTTL {
-		writeError(w, http.StatusBadRequest, "ttlSeconds must be between 600 and 31536000")
-		return false
-	}
-	if len(permissions) == 0 || len(permissions) > 20 {
-		writeError(w, http.StatusBadRequest, "provide between 1 and 20 permissions")
-		return false
-	}
-	for _, item := range permissions {
-		resources, ok := allowedResources[item.APIGroup]
-		if !ok || !slices.Contains(resources, item.Resource) || len(item.Verbs) == 0 {
-			writeError(w, http.StatusBadRequest, "permission contains a resource outside the allowlist")
-			return false
-		}
-		if item.Resource == "secrets" {
-			if len(item.ResourceNames) > 0 {
-				if len(item.Verbs) != 1 || item.Verbs[0] != "get" {
-					writeError(w, http.StatusBadRequest, "named Secrets only support get")
-					return false
-				}
-				if len(item.ResourceNames) > 50 {
-					writeError(w, http.StatusBadRequest, "select at most 50 Secret names")
-					return false
-				}
-				seenNames := make(map[string]struct{}, len(item.ResourceNames))
-				for _, name := range item.ResourceNames {
-					if len(validation.IsDNS1123Subdomain(name)) > 0 {
-						writeError(w, http.StatusBadRequest, "Secret names must be valid DNS subdomains")
-						return false
-					}
-					if _, exists := seenNames[name]; exists {
-						writeError(w, http.StatusBadRequest, "Secret names must be unique")
-						return false
-					}
-					seenNames[name] = struct{}{}
-				}
-			}
-		} else if len(item.ResourceNames) > 0 {
-			writeError(w, http.StatusBadRequest, "resourceNames are only supported for Secrets")
-			return false
-		}
-		for _, verb := range item.Verbs {
-			if verb == "delete" {
-				if item.Resource != "pods" {
-					writeError(w, http.StatusBadRequest, "delete is only allowed for pods")
-					return false
-				}
-				continue
-			}
-			if item.Resource == "pods/exec" {
-				if verb != "create" {
-					writeError(w, http.StatusBadRequest, "pods/exec only supports the create verb")
-					return false
-				}
-				continue
-			}
-			if !slices.Contains([]string{"get", "list", "watch"}, verb) {
-				writeError(w, http.StatusBadRequest, "only get, list, watch, and delete pods verbs are allowed")
-				return false
-			}
-			if item.Resource == "pods/log" && verb != "get" {
-				writeError(w, http.StatusBadRequest, "pods/log only supports the get verb")
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func (a *api) update(w http.ResponseWriter, r *http.Request, namespace, name string) {
