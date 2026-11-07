@@ -1,27 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 import { HttpClient, HttpHeaders } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
-
-export interface Permission {
-  apiGroup: string;
-  resource: string;
-  verbs: string[];
-  resourceNames?: string[];
-}
-
-export interface Identity {
-  name: string;
-  namespace: string;
-  namespaces: string[];
-  createdAt: string;
-  permissions: Permission[];
-}
-
-export interface IssuedToken {
-  identity: Identity;
-  token: string;
-  expiresAt: string;
-}
+import { Identity, IssuedToken, Permission } from './models';
 
 @Injectable({ providedIn: 'root' })
 export class AccessApi {

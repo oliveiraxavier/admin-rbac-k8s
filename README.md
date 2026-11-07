@@ -38,16 +38,16 @@ O usuário Kubernetes do backend precisa operar ServiceAccounts e criar TokenReq
 Terminal 1, na raiz do projeto:
 
 ```sh
-export ADMIN_API_TOKEN="$(openssl rand -hex 32)"
-printf 'Chave para o painel: %s\n' "$ADMIN_API_TOKEN"
-export TARGET_NAMESPACES="default,canary-deployment"
-export LISTEN_ADDR="127.0.0.1:8080"
-# Opcional: export KUBECONFIG="$HOME/.kube/config"
+cp .env.example .env
+# Defina ADMIN_API_TOKEN em .env usando a saída de: openssl rand -hex 32
+set -a
+. ./.env
+set +a
 cd backend
-go run .
+go run ./cmd/server
 ```
 
-Informe o valor de `ADMIN_API_TOKEN` no campo Segredo da API do painel. Para usá-lo no browser, guarde o valor gerado em um gerenciador de segredos antes de executar o backend.
+Informe o valor de `ADMIN_API_TOKEN` no campo Segredo da API do painel. O arquivo `.env` é local e não deve ser commitado.
 
 Terminal 2:
 
