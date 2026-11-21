@@ -63,23 +63,52 @@ Abra http://localhost:4200. O servidor Angular encaminha `/api` para `127.0.0.1:
 
 ## Login com Authentik
 
-Para subir uma instância local de testes:
+### Subir o Authentik
+
+Com Docker e Docker Compose instalados, execute o script a partir da raiz do
+repositório:
+
+```sh
+./authentik/start-authentik.sh
+```
+
+Na primeira execução, o script gera segredos fortes e grava-os em
+`authentik/.env` (ignorado pelo Git). Ele também limita o serviço a
+`127.0.0.1:9000`, acessível apenas na máquina local. **Execute o script somente
+na primeira configuração:** ele substitui `authentik/.env`. Para iniciar
+novamente uma instância já configurada, use:
 
 ```sh
 cd authentik
-cp .env.example .env
-# Substitua PG_PASS e AUTHENTIK_SECRET_KEY por valores aleatórios e fortes.
 docker compose up -d
 ```
 
-O serviço fica em http://localhost:9000. Faça a configuração inicial e crie uma aplicação com provedor OAuth2/OpenID Connect:
+Para parar os serviços sem apagar os dados, execute `docker compose stop` no
+diretório `authentik`. Não remova o volume `database` se quiser preservar a
+configuração e os dados do Authentik.
+
+Na primeira configuração, abra
+http://localhost:9000/if/flow/initial-setup/ e defina a senha da conta
+administrativa inicial do Authentik.
+
+### Configurar login OIDC
+
+No Authentik, crie um grupo para os usuários que podem administrar o painel
+(por exemplo, `k8s-admins`) e adicione somente os administradores a esse grupo.
+Crie uma aplicação com provedor OAuth2/OpenID Connect:
 
 - Use o fluxo Authorization Code.
 - Cadastre `http://localhost:4200/auth/callback` como Redirect URI.
 - Habilite os escopos `openid`, `profile` e `email`.
+- Configure o provedor para incluir um claim `groups` no ID token, contendo os
+  grupos do usuário.
+- Restrinja a aplicação no Authentik para que somente o grupo `k8s-admins`
+  tenha acesso.
 - Copie o issuer URL, o client ID e o client secret do provedor.
 
-Configure o backend antes de iniciá-lo:
+Configure o backend com os dados do provedor. `AUTHENTIK_ALLOWED_GROUPS`
+adiciona a verificação do grupo no próprio backend; o nome deve corresponder
+exatamente ao valor presente no claim `groups`:
 
 ```sh
 export AUTHENTIK_ISSUER_URL="http://localhost:9000/application/o/<slug-da-aplicacao>/"
@@ -87,6 +116,7 @@ export AUTHENTIK_CLIENT_ID="<client-id>"
 export AUTHENTIK_CLIENT_SECRET="<client-secret>"
 export AUTHENTIK_REDIRECT_URL="http://localhost:4200/auth/callback"
 export AUTHENTIK_SESSION_SECRET="$(openssl rand -hex 32)"
+export AUTHENTIK_ALLOWED_GROUPS="k8s-admins"
 export TARGET_NAMESPACES="default,canary-deployment"
 cd backend
 go run ./cmd/server
@@ -94,7 +124,9 @@ go run ./cmd/server
 
 Use o issuer URL exato apresentado pelo Authentik. Em produção, configure HTTPS para o issuer e para a aplicação; o backend exige HTTPS no redirect fora de `localhost`. Opcionalmente, `AUTHENTIK_ALLOWED_GROUPS` aceita uma lista separada por vírgulas. Para restringir grupos, inclua um claim `groups` no ID token do provedor. Quando OIDC está configurado, `ADMIN_API_TOKEN` não autentica requisições.
 
-Por padrão, qualquer usuário autorizado a acessar essa aplicação no Authentik pode administrar o painel. Restrinja o acesso à aplicação por políticas no Authentik ou configure `AUTHENTIK_ALLOWED_GROUPS` antes de disponibilizá-la a mais usuários.
+Use as duas restrições — acesso à aplicação no Authentik e
+`AUTHENTIK_ALLOWED_GROUPS` no backend — para garantir que somente
+administradores autorizados possam acessar o painel.
 
 ## Verificações
 
