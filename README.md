@@ -9,14 +9,15 @@ Painel local para criar e administrar identidades de acesso Kubernetes com permi
 - O painel mostra e administra os bindings que ele próprio gerencia. Permissões adicionadas manualmente à mesma ServiceAccount fora do painel podem ampliar o acesso e não aparecem nesta matriz.
 - Tokens têm validade solicitada entre 10 minutos e 365 dias. Se `ttlSeconds` for omitido na API, o backend usa 365 dias; isso não cria um token sem expiração. O API server pode aplicar uma duração menor. O valor é mostrado uma única vez; para obter outro, emita um novo token.
 - Editar permissões atualiza a Role vinculada à ServiceAccount. A mudança afeta os tokens dessa identidade.
-- A chave de administração da API é compartilhada e mantida apenas em memória pelo navegador. Este é um MVP para ambiente controlado, não um sistema de autenticação multiusuário.
+- O login principal pode usar Authentik via OpenID Connect. O backend valida a identidade e mantém uma sessão assinada em cookie `HttpOnly`; a chave compartilhada continua disponível somente como modo legado quando OIDC não está configurado.
 
 ## Onde os dados são salvos
 
 - **No cluster Kubernetes (etcd):** a `ServiceAccount` fica no namespace de origem escolhido. Para cada namespace de acesso, o backend cria uma `Role` e uma `RoleBinding` namespaced que referencia essa ServiceAccount. Esses objetos persistem no cluster e podem ser inspecionados com `kubectl`.
 - **Namespaces e permissões:** não há banco de dados próprio. O painel reconstrói os namespaces de acesso lendo os `RoleBindings` gerenciados; as regras ficam nas `Roles` correspondentes.
 - **Token Kubernetes emitido:** a API `TokenRequest` devolve um JWT temporário, mas o backend não o grava em um `Secret` nem em banco. O frontend o mantém em memória para exibição única; fechar a janela/aba descarta a cópia do painel.
-- **Segredo administrativo do painel:** vem da variável de ambiente `ADMIN_API_TOKEN` do processo Go e fica em memória no frontend enquanto conectado. Não é salvo no cluster nem em `localStorage`.
+- **Sessão do painel:** no modo Authentik, o navegador recebe um cookie de sessão `HttpOnly`, assinado pelo backend e válido por até oito horas (ou até o vencimento do ID token). O segredo de assinatura fica apenas em `AUTHENTIK_SESSION_SECRET`; tokens de acesso do Authentik não são armazenados no navegador.
+- **Modo legado:** `ADMIN_API_TOKEN` mantém a autenticação compartilhada anterior apenas quando as variáveis OIDC não estão configuradas.
 
 ## Verbos e subrecursos
 
@@ -60,6 +61,41 @@ npm start
 
 Abra http://localhost:4200. O servidor Angular encaminha `/api` para `127.0.0.1:8080` durante o desenvolvimento.
 
+## Login com Authentik
+
+Para subir uma instância local de testes:
+
+```sh
+cd authentik
+cp .env.example .env
+# Substitua PG_PASS e AUTHENTIK_SECRET_KEY por valores aleatórios e fortes.
+docker compose up -d
+```
+
+O serviço fica em http://localhost:9000. Faça a configuração inicial e crie uma aplicação com provedor OAuth2/OpenID Connect:
+
+- Use o fluxo Authorization Code.
+- Cadastre `http://localhost:4200/auth/callback` como Redirect URI.
+- Habilite os escopos `openid`, `profile` e `email`.
+- Copie o issuer URL, o client ID e o client secret do provedor.
+
+Configure o backend antes de iniciá-lo:
+
+```sh
+export AUTHENTIK_ISSUER_URL="http://localhost:9000/application/o/<slug-da-aplicacao>/"
+export AUTHENTIK_CLIENT_ID="<client-id>"
+export AUTHENTIK_CLIENT_SECRET="<client-secret>"
+export AUTHENTIK_REDIRECT_URL="http://localhost:4200/auth/callback"
+export AUTHENTIK_SESSION_SECRET="$(openssl rand -hex 32)"
+export TARGET_NAMESPACES="default,canary-deployment"
+cd backend
+go run ./cmd/server
+```
+
+Use o issuer URL exato apresentado pelo Authentik. Em produção, configure HTTPS para o issuer e para a aplicação; o backend exige HTTPS no redirect fora de `localhost`. Opcionalmente, `AUTHENTIK_ALLOWED_GROUPS` aceita uma lista separada por vírgulas. Para restringir grupos, inclua um claim `groups` no ID token do provedor. Quando OIDC está configurado, `ADMIN_API_TOKEN` não autentica requisições.
+
+Por padrão, qualquer usuário autorizado a acessar essa aplicação no Authentik pode administrar o painel. Restrinja o acesso à aplicação por políticas no Authentik ou configure `AUTHENTIK_ALLOWED_GROUPS` antes de disponibilizá-la a mais usuários.
+
 ## Verificações
 
 ```sh
@@ -67,9 +103,21 @@ cd backend && go test ./...
 cd ../frontend && npm run build
 ```
 
+## Hook pre-commit
+
+O script `.githooks/pre-commit` formata os arquivos Go do backend, executa `go test ./...` e `go vet ./...`, e então compila o frontend com a versão Node definida em `frontend/.nvmrc`. Ative-o em cada clone com:
+
+```sh
+git config core.hooksPath .githooks
+```
+
+Se a formatação alterar um arquivo Go staged, o hook interrompe o commit para que as mudanças sejam revisadas e staged explicitamente.
+
 ## Endpoints
 
 - `GET /healthz`: verificação de saúde sem autenticação.
+- `GET /auth/login`, `GET /auth/callback`, `GET /auth/logout`: fluxo OIDC de login e logout quando Authentik está configurado.
+- `GET /auth/session`: informa o modo de autenticação e o estado da sessão para a interface.
 - `GET /api/v1/namespaces`: namespaces permitidos.
 - `GET /api/v1/tokens`: identidades gerenciadas e permissões.
 - `POST /api/v1/tokens`: cria ServiceAccount, Role e RoleBinding em cada namespace selecionado, e emite o token inicial.
@@ -77,8 +125,8 @@ cd ../frontend && npm run build
 - `POST /api/v1/tokens/{namespace}/{name}/issue`: emite um novo token temporário.
 - `DELETE /api/v1/tokens/{namespace}/{name}`: remove a identidade e os objetos RBAC associados.
 
-Todos os endpoints `/api` exigem `Authorization: Bearer <ADMIN_API_TOKEN>`.
+Os endpoints `/api` exigem uma sessão Authentik quando OIDC está configurado. No modo legado, exigem `Authorization: Bearer <ADMIN_API_TOKEN>`.
 
 ## Produção
 
-Não exponha o backend diretamente à internet. O segredo estático compartilhado não substitui autenticação de usuários, autorização por função, auditoria ou TLS. Antes de uso compartilhado, integre um provedor de identidade, proteja a API por TLS, armazene segredos fora do frontend e revise o RBAC efetivo concedido à identidade do backend. A validação da aplicação não reduz o impacto de um backend comprometido.
+Não exponha o backend diretamente à internet. Use TLS no proxy reverso, issuer e redirect OIDC; proteja `AUTHENTIK_SESSION_SECRET` e o client secret fora do frontend; considere configurar grupos permitidos e auditoria; e revise o RBAC efetivo concedido à identidade do backend. A validação da aplicação não reduz o impacto de um backend comprometido.
