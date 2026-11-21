@@ -25,6 +25,26 @@ func TestAuthenticationRequired(t *testing.T) {
 	}
 }
 
+func TestAuthSessionReportsLegacyMode(t *testing.T) {
+	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	request := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
+	response := httptest.NewRecorder()
+	app.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
+	}
+	var session struct {
+		Provider      string `json:"provider"`
+		Authenticated bool   `json:"authenticated"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil {
+		t.Fatalf("decode session response: %v", err)
+	}
+	if session.Provider != "token" || session.Authenticated {
+		t.Fatalf("expected unauthenticated legacy mode, got %#v", session)
+	}
+}
+
 func TestOpenAPIDocumentationRoutes(t *testing.T) {
 	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
 

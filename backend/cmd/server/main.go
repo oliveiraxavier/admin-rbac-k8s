@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"k8s-admin-rbac/internal/api"
+	"k8s-admin-rbac/internal/authentik"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -17,8 +19,26 @@ import (
 
 func main() {
 	adminToken := os.Getenv("ADMIN_API_TOKEN")
-	if len(adminToken) < 32 {
-		log.Fatal("ADMIN_API_TOKEN must contain at least 32 characters")
+	authConfig := authentik.Config{
+		IssuerURL:     os.Getenv("AUTHENTIK_ISSUER_URL"),
+		ClientID:      os.Getenv("AUTHENTIK_CLIENT_ID"),
+		ClientSecret:  os.Getenv("AUTHENTIK_CLIENT_SECRET"),
+		RedirectURL:   os.Getenv("AUTHENTIK_REDIRECT_URL"),
+		SessionSecret: os.Getenv("AUTHENTIK_SESSION_SECRET"),
+		AllowedGroups: splitList(os.Getenv("AUTHENTIK_ALLOWED_GROUPS")),
+	}
+	oidcConfigured := authConfig.IssuerURL != "" || authConfig.ClientID != "" ||
+		authConfig.ClientSecret != "" || authConfig.RedirectURL != "" || authConfig.SessionSecret != "" ||
+		len(authConfig.AllowedGroups) > 0
+	var authenticator *authentik.Authenticator
+	if oidcConfigured {
+		var authErr error
+		authenticator, authErr = authentik.New(context.Background(), authConfig)
+		if authErr != nil {
+			log.Fatalf("configure Authentik login: %v", authErr)
+		}
+	} else if len(adminToken) < 32 {
+		log.Fatal("set Authentik OIDC configuration or provide ADMIN_API_TOKEN with at least 32 characters")
 	}
 
 	namespaces := splitList(os.Getenv("TARGET_NAMESPACES"))
@@ -37,7 +57,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              envOr("LISTEN_ADDR", "127.0.0.1:8080"),
-		Handler:           api.NewHandler(client, adminToken, namespaces),
+		Handler:           api.NewHandler(client, adminToken, namespaces, authenticator),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("Kubernetes access manager listening on %s", server.Addr)

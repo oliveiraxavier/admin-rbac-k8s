@@ -7,18 +7,25 @@ import (
 	"slices"
 	"strings"
 
+	"k8s-admin-rbac/internal/authentik"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 type api struct {
-	client     kubernetes.Interface
-	adminToken string
-	namespaces map[string]struct{}
+	client        kubernetes.Interface
+	adminToken    string
+	authenticator *authentik.Authenticator
+	namespaces    map[string]struct{}
 }
 
-func NewHandler(client kubernetes.Interface, token string, namespaces []string) http.Handler {
-	return newAPI(client, token, namespaces).routes()
+func NewHandler(client kubernetes.Interface, token string, namespaces []string, authenticators ...*authentik.Authenticator) http.Handler {
+	app := newAPI(client, token, namespaces)
+	if len(authenticators) > 0 {
+		app.authenticator = authenticators[0]
+	}
+	return app.routes()
 }
 
 func newAPI(client kubernetes.Interface, token string, namespaces []string) *api {
@@ -36,6 +43,16 @@ func (a *api) routes() http.Handler {
 	})
 	mux.HandleFunc("GET /openapi.yaml", openAPIDocument)
 	mux.HandleFunc("GET /docs", swaggerUI)
+	if a.authenticator != nil {
+		a.authenticator.RegisterRoutes(mux)
+		mux.Handle("GET /api/v1/namespaces", a.authenticator.Authenticate(http.HandlerFunc(a.listNamespaces)))
+		mux.Handle("/api/v1/tokens", a.authenticator.Authenticate(http.HandlerFunc(a.collection)))
+		mux.Handle("/api/v1/tokens/", a.authenticator.Authenticate(http.HandlerFunc(a.item)))
+		return mux
+	}
+	mux.HandleFunc("GET /auth/session", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"provider": "token", "authenticated": false})
+	})
 	mux.Handle("GET /api/v1/namespaces", a.authenticate(http.HandlerFunc(a.listNamespaces)))
 	mux.Handle("/api/v1/tokens", a.authenticate(http.HandlerFunc(a.collection)))
 	mux.Handle("/api/v1/tokens/", a.authenticate(http.HandlerFunc(a.item)))

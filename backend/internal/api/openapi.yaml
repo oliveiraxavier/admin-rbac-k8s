@@ -23,6 +23,7 @@ paths:
       tags: [Namespaces]
       summary: Lista os namespaces permitidos
       security:
+        - SessionCookieAuth: []
         - AdminBearerAuth: []
       responses:
         '200':
@@ -40,6 +41,7 @@ paths:
       tags: [Identities]
       summary: Lista as identidades gerenciadas
       security:
+        - SessionCookieAuth: []
         - AdminBearerAuth: []
       responses:
         '200':
@@ -60,6 +62,7 @@ paths:
       tags: [Identities]
       summary: Cria uma identidade e emite seu primeiro token
       security:
+        - SessionCookieAuth: []
         - AdminBearerAuth: []
       requestBody:
         required: true
@@ -102,6 +105,7 @@ paths:
       tags: [Identities]
       summary: Atualiza permissões e namespaces de acesso
       security:
+        - SessionCookieAuth: []
         - AdminBearerAuth: []
       requestBody:
         required: true
@@ -130,6 +134,7 @@ paths:
       tags: [Identities]
       summary: Exclui a identidade gerenciada e seus recursos RBAC
       security:
+        - SessionCookieAuth: []
         - AdminBearerAuth: []
       responses:
         '204':
@@ -160,6 +165,7 @@ paths:
       tags: [Identities]
       summary: Emite um novo token para uma identidade existente
       security:
+        - SessionCookieAuth: []
         - AdminBearerAuth: []
       requestBody:
         required: true
@@ -186,10 +192,15 @@ paths:
           $ref: '#/components/responses/ServerError'
 components:
   securitySchemes:
+    SessionCookieAuth:
+      type: apiKey
+      in: cookie
+      name: kubeaccess_session
+      description: Sessão Authentik assinada pelo backend.
     AdminBearerAuth:
       type: http
       scheme: bearer
-      description: Segredo administrativo configurado em ADMIN_API_TOKEN.
+      description: Autenticação legada quando OIDC não está configurado.
   schemas:
     Permission:
       type: object
