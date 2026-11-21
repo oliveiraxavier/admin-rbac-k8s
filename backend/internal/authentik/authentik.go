@@ -69,7 +69,7 @@ type Authenticator struct {
 
 func New(ctx context.Context, config Config) (*Authenticator, error) {
 	if config.IssuerURL == "" || config.ClientID == "" || config.ClientSecret == "" || config.RedirectURL == "" {
-		return nil, errors.New("Authentik issuer, client ID, client secret, and redirect URL are required")
+		return nil, errors.New("authentik issuer, client ID, client secret, and redirect URL are required")
 	}
 	if len(config.SessionSecret) < 32 {
 		return nil, errors.New("AUTHENTIK_SESSION_SECRET must contain at least 32 characters")
@@ -77,17 +77,17 @@ func New(ctx context.Context, config Config) (*Authenticator, error) {
 	issuerURL, err := url.Parse(config.IssuerURL)
 	if err != nil || issuerURL.Host == "" || issuerURL.User != nil || issuerURL.RawQuery != "" ||
 		issuerURL.Fragment != "" || (issuerURL.Scheme != "https" && issuerURL.Scheme != "http") {
-		return nil, errors.New("Authentik issuer URL must be an absolute HTTP or HTTPS URL without query or fragment")
+		return nil, errors.New("authentik issuer URL must be an absolute HTTP or HTTPS URL without query or fragment")
 	}
 	if issuerURL.Scheme == "http" && issuerURL.Hostname() != "localhost" && issuerURL.Hostname() != "127.0.0.1" {
-		return nil, errors.New("Authentik issuer URL must use HTTPS except on localhost")
+		return nil, errors.New("authentik issuer URL must use HTTPS except on localhost")
 	}
 	redirectURL, err := url.Parse(config.RedirectURL)
 	if err != nil || redirectURL.Host == "" || (redirectURL.Scheme != "https" && redirectURL.Scheme != "http") {
-		return nil, errors.New("Authentik redirect URL must be an absolute HTTP or HTTPS URL")
+		return nil, errors.New("authentik redirect URL must be an absolute HTTP or HTTPS URL")
 	}
 	if redirectURL.Scheme == "http" && redirectURL.Hostname() != "localhost" && redirectURL.Hostname() != "127.0.0.1" {
-		return nil, errors.New("Authentik redirect URL must use HTTPS except on localhost")
+		return nil, errors.New("authentik redirect URL must use HTTPS except on localhost")
 	}
 	providerContext := context.WithValue(context.WithoutCancel(ctx), oauth2.HTTPClient, &http.Client{Timeout: 15 * time.Second})
 	provider, err := oidc.NewProvider(providerContext, config.IssuerURL)

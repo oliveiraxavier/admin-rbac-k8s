@@ -79,6 +79,14 @@
           },
           "defaultConfiguration": "production"
         },
+        "test": {
+          "builder": "@angular/build:unit-test",
+          "options": {
+            "buildTarget": "frontend:build:development",
+            "tsConfig": "tsconfig.spec.json",
+            "include": ["src/**/*.spec.ts"]
+          }
+        },
         "serve": {
           "builder": "@angular/build:dev-server",
           "options": {

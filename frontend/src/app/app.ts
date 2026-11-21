@@ -1,8 +1,8 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { DatePipe } from '@angular/common';
-import { Component, signal } from '@angular/core';
+import { Component, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { AccessApi } from './access-api';
+import { AccessApi, AuthSession } from './access-api';
 import { DurationUnit, Identity, IssuedToken, PermissionOption } from './models';
 import { PermissionPolicy, PERMISSION_VERBS } from './permission-policy';
 
@@ -12,7 +12,10 @@ import { PermissionPolicy, PERMISSION_VERBS } from './permission-policy';
   styleUrl: './app.scss',
   templateUrl: './app.html',
 })
-export class App {
+export class App implements OnInit {
+  protected readonly authReady = signal(false);
+  protected readonly authMode = signal<AuthSession['provider']>('token');
+  protected readonly authUser = signal<AuthSession['user']>(undefined);
   protected readonly connected = signal(false);
   protected readonly loading = signal(false);
   protected readonly busy = signal(false);
@@ -45,6 +48,22 @@ export class App {
     private readonly permissionPolicy: PermissionPolicy,
   ) {}
 
+  async ngOnInit(): Promise<void> {
+    try {
+      const session = await this.api.session();
+      this.authMode.set(session.provider);
+      this.authUser.set(session.user);
+      if (session.provider === 'authentik' && session.authenticated) {
+        this.api.connect();
+        await this.loadWorkspace();
+      }
+    } catch (error) {
+      this.errorMessage.set(this.describeError(error));
+    } finally {
+      this.authReady.set(true);
+    }
+  }
+
   protected async connect(): Promise<void> {
     const token = this.apiKey.trim();
     if (!token) {
@@ -55,11 +74,7 @@ export class App {
     this.loading.set(true);
     this.api.connect(token);
     try {
-      const [namespaces, identities] = await Promise.all([this.api.namespaces(), this.api.list()]);
-      this.namespaces.set(namespaces);
-      this.identities.set(identities);
-      this.connected.set(true);
-      this.apiKey = '';
+      await this.loadWorkspace();
     } catch (error) {
       this.api.disconnect();
       this.errorMessage.set(this.describeError(error));
@@ -69,6 +84,10 @@ export class App {
   }
 
   protected disconnect(): void {
+    if (this.authMode() === 'authentik') {
+      window.location.assign('/auth/logout');
+      return;
+    }
     this.api.disconnect();
     this.connected.set(false);
     this.identities.set([]);
@@ -80,6 +99,10 @@ export class App {
     this.errorMessage.set('');
     this.formError.set('');
     this.issueError.set('');
+  }
+
+  protected login(): void {
+    window.location.assign('/auth/login');
   }
 
   protected async refresh(): Promise<void> {
@@ -321,6 +344,14 @@ export class App {
 
   protected trackIdentity(_index: number, identity: Identity): string {
     return `${identity.namespace}/${identity.name}`;
+  }
+
+  private async loadWorkspace(): Promise<void> {
+    const [namespaces, identities] = await Promise.all([this.api.namespaces(), this.api.list()]);
+    this.namespaces.set(namespaces);
+    this.identities.set(identities);
+    this.connected.set(true);
+    this.apiKey = '';
   }
 
   private describeError(error: unknown): string {

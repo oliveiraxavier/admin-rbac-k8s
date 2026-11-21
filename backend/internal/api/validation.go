@@ -50,10 +50,10 @@ func validateIdentity(name, namespace string, ttl int64, permissions []permissio
 				seenNames := make(map[string]struct{}, len(item.ResourceNames))
 				for _, name := range item.ResourceNames {
 					if len(validation.IsDNS1123Subdomain(name)) > 0 {
-						return errors.New("Secret names must be valid DNS subdomains")
+						return errors.New("secret names must be valid DNS subdomains")
 					}
 					if _, exists := seenNames[name]; exists {
-						return errors.New("Secret names must be unique")
+						return errors.New("secret names must be unique")
 					}
 					seenNames[name] = struct{}{}
 				}
