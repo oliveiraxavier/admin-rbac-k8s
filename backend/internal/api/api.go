@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"k8s-admin-rbac/internal/authentik"
+	"admin-rbac-k8s/internal/authentik"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"

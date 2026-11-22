@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"k8s-admin-rbac/internal/api"
-	"k8s-admin-rbac/internal/authentik"
+	"admin-rbac-k8s/internal/api"
+	"admin-rbac-k8s/internal/authentik"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
