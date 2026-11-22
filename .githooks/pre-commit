@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+if ! command -v pre-commit >/dev/null 2>&1; then
+  printf 'Pre-commit: o programa "pre-commit" nao esta instalado.\n' >&2
+  printf 'Instale com: pipx install pre-commit (ou pip install --user pre-commit).\n' >&2
+  exit 1
+fi
+
+printf '\nRunning Go pre-commit hooks...\n'
+pre-commit run --all-files
+
+printf '\nRunning frontend tests...\n'
+(
+  cd frontend
+  source "$HOME/.nvm/nvm.sh" || true
+  nvm use || true
+  npm test -- --watch=false
+)
+
+printf '\nBuilding frontend...\n'
+(
+  cd frontend
+  source "$HOME/.nvm/nvm.sh" ||true
+  nvm use || true
+  npm run build
+)

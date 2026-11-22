@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"log"
 	"net/http"
@@ -8,15 +9,26 @@ import (
 	"strings"
 	"time"
 
+	"k8s-admin-rbac/internal/api"
+	"k8s-admin-rbac/internal/authentik"
+
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
 
 func main() {
-	adminToken := os.Getenv("ADMIN_API_TOKEN")
-	if len(adminToken) < 32 {
-		log.Fatal("ADMIN_API_TOKEN must contain at least 32 characters")
+	authConfig := authentik.Config{
+		IssuerURL:     os.Getenv("AUTHENTIK_ISSUER_URL"),
+		ClientID:      os.Getenv("AUTHENTIK_CLIENT_ID"),
+		ClientSecret:  os.Getenv("AUTHENTIK_CLIENT_SECRET"),
+		RedirectURL:   os.Getenv("AUTHENTIK_REDIRECT_URL"),
+		SessionSecret: os.Getenv("AUTHENTIK_SESSION_SECRET"),
+		AllowedGroups: splitList(os.Getenv("AUTHENTIK_ALLOWED_GROUPS")),
+	}
+	authenticator, err := authentik.New(context.Background(), authConfig)
+	if err != nil {
+		log.Fatalf("configure Authentik login: %v", err)
 	}
 
 	namespaces := splitList(os.Getenv("TARGET_NAMESPACES"))
@@ -33,10 +45,9 @@ func main() {
 		log.Fatalf("create Kubernetes client: %v", err)
 	}
 
-	app := newAPI(client, adminToken, namespaces)
 	server := &http.Server{
 		Addr:              envOr("LISTEN_ADDR", "127.0.0.1:8080"),
-		Handler:           app.routes(),
+		Handler:           api.NewHandler(client, namespaces, authenticator),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("Kubernetes access manager listening on %s", server.Addr)

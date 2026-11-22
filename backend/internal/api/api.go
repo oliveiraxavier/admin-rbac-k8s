@@ -1,57 +1,35 @@
-package main
+package api
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
+
+	"k8s-admin-rbac/internal/authentik"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 type api struct {
-	client     kubernetes.Interface
-	adminToken string
-	namespaces map[string]struct{}
+	client        kubernetes.Interface
+	authenticator *authentik.Authenticator
+	namespaces    map[string]struct{}
 }
 
-type permission struct {
-	APIGroup      string   `json:"apiGroup"`
-	Resource      string   `json:"resource"`
-	Verbs         []string `json:"verbs"`
-	ResourceNames []string `json:"resourceNames,omitempty"`
+func NewHandler(client kubernetes.Interface, namespaces []string, authenticator *authentik.Authenticator) http.Handler {
+	app := newAPI(client, namespaces)
+	app.authenticator = authenticator
+	return app.routes()
 }
 
-type identity struct {
-	Name        string       `json:"name"`
-	Namespace   string       `json:"namespace"`
-	Namespaces  []string     `json:"namespaces"`
-	CreatedAt   metav1.Time  `json:"createdAt"`
-	Permissions []permission `json:"permissions"`
-}
-
-type createRequest struct {
-	Name             string       `json:"name"`
-	Namespace        string       `json:"namespace"`
-	TargetNamespaces []string     `json:"targetNamespaces"`
-	TTLSeconds       *int64       `json:"ttlSeconds"`
-	Permissions      []permission `json:"permissions"`
-}
-
-type tokenResponse struct {
-	Identity identity `json:"identity"`
-	Token    string   `json:"token"`
-	Expires  string   `json:"expiresAt"`
-}
-
-func newAPI(client kubernetes.Interface, token string, namespaces []string) *api {
+func newAPI(client kubernetes.Interface, namespaces []string) *api {
 	allowed := make(map[string]struct{}, len(namespaces))
 	for _, namespace := range namespaces {
 		allowed[namespace] = struct{}{}
 	}
-	return &api{client: client, adminToken: token, namespaces: allowed}
+	return &api{client: client, namespaces: allowed}
 }
 
 func (a *api) routes() http.Handler {
@@ -59,9 +37,21 @@ func (a *api) routes() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.Handle("GET /api/v1/namespaces", a.authenticate(http.HandlerFunc(a.listNamespaces)))
-	mux.Handle("/api/v1/tokens", a.authenticate(http.HandlerFunc(a.collection)))
-	mux.Handle("/api/v1/tokens/", a.authenticate(http.HandlerFunc(a.item)))
+	mux.HandleFunc("GET /openapi.yaml", openAPIDocument)
+	mux.HandleFunc("GET /docs", swaggerUI)
+	if a.authenticator == nil {
+		unavailable := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, http.StatusServiceUnavailable, "Authentik authentication is not configured")
+		})
+		mux.Handle("GET /api/v1/namespaces", unavailable)
+		mux.Handle("/api/v1/tokens", unavailable)
+		mux.Handle("/api/v1/tokens/", unavailable)
+		return mux
+	}
+	a.authenticator.RegisterRoutes(mux)
+	mux.Handle("GET /api/v1/namespaces", a.authenticator.Authenticate(http.HandlerFunc(a.listNamespaces)))
+	mux.Handle("/api/v1/tokens", a.authenticator.Authenticate(http.HandlerFunc(a.collection)))
+	mux.Handle("/api/v1/tokens/", a.authenticator.Authenticate(http.HandlerFunc(a.item)))
 
 	return mux
 }
@@ -73,17 +63,6 @@ func (a *api) listNamespaces(w http.ResponseWriter, _ *http.Request) {
 	}
 	slices.Sort(namespaces)
 	writeJSON(w, http.StatusOK, namespaces)
-}
-
-func (a *api) authenticate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if provided == r.Header.Get("Authorization") || subtle.ConstantTimeCompare([]byte(provided), []byte(a.adminToken)) != 1 {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (a *api) collection(w http.ResponseWriter, r *http.Request) {
@@ -183,8 +162,8 @@ func (a *api) issueToken(w http.ResponseWriter, r *http.Request, namespace, name
 		return
 	}
 	ttlSeconds := tokenTTL(request.TTLSeconds)
-	if ttlSeconds < minimumTTL || ttlSeconds > maximumTTL {
-		writeError(w, http.StatusBadRequest, "ttlSeconds must be between 600 and 31536000") //
+	if err := validateTokenTTL(ttlSeconds); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	ctx := r.Context()

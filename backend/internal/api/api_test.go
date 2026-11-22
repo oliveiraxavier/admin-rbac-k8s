@@ -1,7 +1,8 @@
-package main
+package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,32 +11,105 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func TestAuthenticationRequired(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+func TestProtectedRoutesFailClosedWithoutAuthentik(t *testing.T) {
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/tokens", nil)
+	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	response := httptest.NewRecorder()
 	app.routes().ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, response.Code)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected unavailable status %d without Authentik, got %d", http.StatusServiceUnavailable, response.Code)
+	}
+}
+
+func TestOpenAPIDocumentationRoutes(t *testing.T) {
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
+
+	request := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
+	response := httptest.NewRecorder()
+	app.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected OpenAPI status %d, got %d", http.StatusOK, response.Code)
+	}
+	if contentType := response.Header().Get("Content-Type"); contentType != "application/yaml; charset=utf-8" {
+		t.Fatalf("expected YAML content type, got %q", contentType)
+	}
+	if !strings.Contains(response.Body.String(), "openapi: 3.0.3") {
+		t.Fatal("expected OpenAPI 3 document")
+	}
+	if strings.Contains(response.Body.String(), "AdminBearerAuth") {
+		t.Fatal("OpenAPI document must not advertise bearer authentication")
+	}
+	jsonSpec, err := utilyaml.ToJSON(openAPISpec)
+	if err != nil {
+		t.Fatalf("expected valid OpenAPI YAML, got error: %v", err)
+	}
+	var document struct {
+		OpenAPI string                     `json:"openapi"`
+		Paths   map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(jsonSpec, &document); err != nil {
+		t.Fatalf("decode OpenAPI document: %v", err)
+	}
+	if document.OpenAPI != "3.0.3" || len(document.Paths) == 0 {
+		t.Fatalf("expected OpenAPI 3.0.3 with paths, got version %q and %d paths", document.OpenAPI, len(document.Paths))
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/docs", nil)
+	response = httptest.NewRecorder()
+	app.routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected Swagger UI status %d, got %d", http.StatusOK, response.Code)
+	}
+	if !strings.Contains(response.Body.String(), "/openapi.yaml") {
+		t.Fatal("expected Swagger UI to load the OpenAPI document")
+	}
+}
+
+func TestValidateNamespaceTargets(t *testing.T) {
+	allowedNamespaces := map[string]struct{}{"team-a": {}, "team-b": {}}
+	testCases := []struct {
+		name       string
+		namespaces []string
+		wantError  string
+	}{
+		{name: "allowed namespaces", namespaces: []string{"team-a", "team-b"}},
+		{name: "empty selection", wantError: "select at least one allowed namespace"},
+		{name: "namespace outside allowlist", namespaces: []string{"team-c"}, wantError: "namespace is not allowed"},
+		{name: "duplicate namespace", namespaces: []string{"team-a", "team-a"}, wantError: "target namespaces must be unique"},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := validateNamespaceTargets(testCase.namespaces, allowedNamespaces)
+			if testCase.wantError == "" {
+				if err != nil {
+					t.Fatalf("expected valid namespaces, got error: %v", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != testCase.wantError {
+				t.Fatalf("expected error %q, got %v", testCase.wantError, err)
+			}
+		})
 	}
 }
 
 func TestPermissionValidationRejectsEscalation(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/tokens", strings.NewReader(`{"name":"viewer","namespace":"team-a","ttlSeconds":3600,"permissions":[{"apiGroup":"","resource":"secrets","verbs":["get"]}]}`))
-	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	response := httptest.NewRecorder()
-	app.routes().ServeHTTP(response, request)
+	app.collection(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
 	}
 }
 
 func TestPermissionValidationAllowsDeletePodsOnly(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	response := httptest.NewRecorder()
 	if !app.validate(response, "operator", "team-a", 3600, []permission{{APIGroup: "", Resource: "pods", Verbs: []string{"delete"}}}) {
 		t.Fatalf("expected delete pods to be allowed, got %d: %s", response.Code, response.Body.String())
@@ -50,7 +124,7 @@ func TestPermissionValidationAllowsDeletePodsOnly(t *testing.T) {
 }
 
 func TestPermissionValidationAllowsPodLogsOnlyWithGet(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	response := httptest.NewRecorder()
 	if !app.validate(response, "viewer", "team-a", 3600, []permission{{APIGroup: "", Resource: "pods/log", Verbs: []string{"get"}}}) {
 		t.Fatalf("expected get pods/log to be allowed, got %d: %s", response.Code, response.Body.String())
@@ -63,7 +137,7 @@ func TestPermissionValidationAllowsPodLogsOnlyWithGet(t *testing.T) {
 }
 
 func TestPermissionValidationAllowsPodExecOnlyWithCreate(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	response := httptest.NewRecorder()
 	if !app.validate(response, "operator", "team-a", 3600, []permission{{APIGroup: "", Resource: "pods/exec", Verbs: []string{"create"}}}) {
 		t.Fatalf("expected create pods/exec to be allowed, got %d: %s", response.Code, response.Body.String())
@@ -84,7 +158,7 @@ func TestPermissionValidationAllowsPodExecOnlyWithCreate(t *testing.T) {
 }
 
 func TestSecretPermissionsSupportNamedAndAllSecretsModes(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	secretPermission := permission{APIGroup: "", Resource: "secrets", Verbs: []string{"get"}, ResourceNames: []string{"db-credentials", "registry-auth"}}
 	response := httptest.NewRecorder()
 	if !app.validate(response, "viewer", "team-a", 3600, []permission{secretPermission}) {
@@ -144,7 +218,7 @@ func TestSecretResourceNamesSurviveRoleRoundTrip(t *testing.T) {
 }
 
 func TestTokenTTLAllowsOneYearAndRejectsMore(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	permissions := []permission{{APIGroup: "", Resource: "pods", Verbs: []string{"get"}}}
 	response := httptest.NewRecorder()
 	if !app.validate(response, "viewer", "team-a", maximumTTL, permissions) {
@@ -169,7 +243,7 @@ func TestOmittedTokenTTLDefaultsToOneYear(t *testing.T) {
 
 func TestIdentityCanHaveRoleBindingsInMultipleNamespaces(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	app := newAPI(client, "01234567890123456789012345678901", []string{"identity-ns", "team-a", "team-b"})
+	app := newAPI(client, []string{"identity-ns", "team-a", "team-b"})
 	permissions := []permission{{APIGroup: "", Resource: "pods", Verbs: []string{"get", "list"}}}
 	account := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "viewer", Namespace: "identity-ns"}}
 
@@ -199,7 +273,7 @@ func TestUpdateAndDeleteIdentityAcrossNamespaces(t *testing.T) {
 		Name: "viewer", Namespace: "identity-ns", Labels: map[string]string{managedLabel: managedValue},
 	}}
 	client := fake.NewSimpleClientset(account)
-	app := newAPI(client, "01234567890123456789012345678901", []string{"identity-ns", "team-a", "team-b"})
+	app := newAPI(client, []string{"identity-ns", "team-a", "team-b"})
 	permissions := []permission{{APIGroup: "", Resource: "pods", Verbs: []string{"get"}}}
 	for _, namespace := range []string{"team-a", "team-b"} {
 		if _, _, err := app.createScope(context.Background(), account.Name, account.Namespace, namespace, permissions); err != nil {
@@ -208,9 +282,8 @@ func TestUpdateAndDeleteIdentityAcrossNamespaces(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/tokens/identity-ns/viewer", strings.NewReader(`{"targetNamespaces":["team-b"],"permissions":[{"apiGroup":"","resource":"pods","verbs":["get","list"]}]}`))
-	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	response := httptest.NewRecorder()
-	app.routes().ServeHTTP(response, request)
+	app.item(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("update returned status %d: %s", response.Code, response.Body.String())
 	}
@@ -223,9 +296,8 @@ func TestUpdateAndDeleteIdentityAcrossNamespaces(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodDelete, "/api/v1/tokens/identity-ns/viewer", nil)
-	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	response = httptest.NewRecorder()
-	app.routes().ServeHTTP(response, request)
+	app.item(response, request)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("delete returned status %d: %s", response.Code, response.Body.String())
 	}

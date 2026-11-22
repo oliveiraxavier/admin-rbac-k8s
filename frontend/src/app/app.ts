@@ -1,24 +1,10 @@
 import { HttpErrorResponse } from '@angular/common/http';
 import { DatePipe } from '@angular/common';
-import { Component, signal } from '@angular/core';
+import { Component, OnInit, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { AccessApi, Identity, IssuedToken } from './access-api';
-
-interface PermissionOption {
-  apiGroup: string;
-  resource: string;
-  label: string;
-  detail: string;
-  selected: Record<string, boolean>;
-  resourceNames: string[];
-  resourceNamesInput: string;
-  allSecrets: boolean;
-}
-
-type DurationUnit = 'hours' | 'days';
-
-const MAX_TOKEN_TTL_DAYS = 365;
-const MIN_TOKEN_TTL_SECONDS = 600;
+import { AccessApi, AuthSession } from './access-api';
+import { DurationUnit, Identity, IssuedToken, PermissionOption } from './models';
+import { PermissionPolicy, PERMISSION_VERBS } from './permission-policy';
 
 @Component({
   imports: [DatePipe, FormsModule],
@@ -26,7 +12,9 @@ const MIN_TOKEN_TTL_SECONDS = 600;
   styleUrl: './app.scss',
   templateUrl: './app.html',
 })
-export class App {
+export class App implements OnInit {
+  protected readonly authReady = signal(false);
+  protected readonly authUser = signal<AuthSession['user']>(undefined);
   protected readonly connected = signal(false);
   protected readonly loading = signal(false);
   protected readonly busy = signal(false);
@@ -41,7 +29,6 @@ export class App {
   protected readonly issueError = signal('');
   protected readonly notice = signal('');
   protected readonly filter = signal('');
-  protected apiKey = '';
   protected name = '';
   protected namespace = '';
   protected targetNamespaces: string[] = [];
@@ -52,76 +39,33 @@ export class App {
   protected editingIdentity: Identity | null = null;
   protected permissions: PermissionOption[] = [];
 
-  private readonly resourceCatalog = [
-    { apiGroup: '', resource: 'pods', label: 'Pods', detail: 'Contêineres e workloads' },
-    { apiGroup: '', resource: 'pods/log', label: 'Logs de Pods', detail: 'Ler stdout/stderr' },
-    {
-      apiGroup: '',
-      resource: 'pods/exec',
-      label: 'Exec em Pods',
-      detail: 'Executar comandos no contêiner',
-    },
-    {
-      apiGroup: '',
-      resource: 'secrets',
-      label: 'Secrets',
-      detail: 'Secrets de configuração e credenciais',
-    },
-    { apiGroup: '', resource: 'services', label: 'Services', detail: 'Serviços de rede' },
-    {
-      apiGroup: 'apps',
-      resource: 'deployments',
-      label: 'Deployments',
-      detail: 'Aplicações implantadas',
-    },
-    {
-      apiGroup: 'apps',
-      resource: 'replicasets',
-      label: 'ReplicaSets',
-      detail: 'Réplicas de workloads',
-    },
-    { apiGroup: 'batch', resource: 'jobs', label: 'Jobs', detail: 'Execuções pontuais' },
-    { apiGroup: 'batch', resource: 'cronjobs', label: 'CronJobs', detail: 'Execuções agendadas' },
-  ];
-  protected readonly verbs = ['get', 'list', 'watch', 'create', 'delete'];
+  protected readonly verbs = PERMISSION_VERBS;
 
-  constructor(private readonly api: AccessApi) {}
+  constructor(
+    private readonly api: AccessApi,
+    private readonly permissionPolicy: PermissionPolicy,
+  ) {}
 
-  protected async connect(): Promise<void> {
-    const token = this.apiKey.trim();
-    if (!token) {
-      this.errorMessage.set('Informe o segredo da API.');
-      return;
-    }
-    this.errorMessage.set('');
-    this.loading.set(true);
-    this.api.connect(token);
+  async ngOnInit(): Promise<void> {
     try {
-      const [namespaces, identities] = await Promise.all([this.api.namespaces(), this.api.list()]);
-      this.namespaces.set(namespaces);
-      this.identities.set(identities);
-      this.connected.set(true);
-      this.apiKey = '';
+      const session = await this.api.session();
+      this.authUser.set(session.user);
+      if (session.authenticated) {
+        await this.loadWorkspace();
+      }
     } catch (error) {
-      this.api.disconnect();
       this.errorMessage.set(this.describeError(error));
     } finally {
-      this.loading.set(false);
+      this.authReady.set(true);
     }
   }
 
   protected disconnect(): void {
-    this.api.disconnect();
-    this.connected.set(false);
-    this.identities.set([]);
-    this.namespaces.set([]);
-    this.apiKey = '';
-    this.tokenResult.set(null);
-    this.formOpen.set(false);
-    this.issueTarget.set(null);
-    this.errorMessage.set('');
-    this.formError.set('');
-    this.issueError.set('');
+    window.location.assign('/auth/logout');
+  }
+
+  protected login(): void {
+    window.location.assign('/auth/login');
   }
 
   protected async refresh(): Promise<void> {
@@ -155,13 +99,7 @@ export class App {
     this.targetNamespaces = this.namespace ? [this.namespace] : [];
     this.ttlValue = 8;
     this.ttlUnit = 'hours';
-    this.permissions = this.resourceCatalog.map((resource) => ({
-      ...resource,
-      selected: { get: false, list: false, watch: false, create: false, delete: false },
-      resourceNames: [],
-      resourceNamesInput: '',
-      allSecrets: false,
-    }));
+    this.permissions = this.permissionPolicy.createOptions();
     this.errorMessage.set('');
     this.formError.set('');
     this.formOpen.set(true);
@@ -173,23 +111,7 @@ export class App {
     this.name = identity.name;
     this.namespace = identity.namespace;
     this.targetNamespaces = [...identity.namespaces];
-    this.permissions = this.resourceCatalog.map((resource) => {
-      const assigned = identity.permissions.find(
-        (item) => item.apiGroup === resource.apiGroup && item.resource === resource.resource,
-      );
-      return {
-        ...resource,
-        selected: Object.fromEntries(
-          this.verbs.map((verb) => [verb, assigned?.verbs.includes(verb) ?? false]),
-        ),
-        resourceNames: assigned?.resourceNames ?? [],
-        resourceNamesInput: assigned?.resourceNames?.join(', ') ?? '',
-        allSecrets:
-          resource.resource === 'secrets' &&
-          assigned !== undefined &&
-          !assigned.resourceNames?.length,
-      };
-    });
+    this.permissions = this.permissionPolicy.optionsFor(identity);
     this.errorMessage.set('');
     this.formError.set('');
     this.formOpen.set(true);
@@ -220,13 +142,7 @@ export class App {
   }
 
   protected canSelectVerb(option: PermissionOption, verb: string): boolean {
-    return (
-      (option.resource !== 'pods/exec' || verb === 'create') &&
-      (verb !== 'create' || option.resource === 'pods/exec') &&
-      (verb !== 'delete' || option.resource === 'pods') &&
-      (option.resource !== 'pods/log' || verb === 'get') &&
-      (option.resource !== 'secrets' || option.allSecrets || verb === 'get')
-    );
+    return this.permissionPolicy.canSelectVerb(option, verb);
   }
 
   protected toggleSecretScope(option: PermissionOption, event: Event): void {
@@ -275,7 +191,7 @@ export class App {
   }
 
   protected maxDuration(unit: DurationUnit): number {
-    return unit === 'days' ? MAX_TOKEN_TTL_DAYS : MAX_TOKEN_TTL_DAYS * 24;
+    return this.permissionPolicy.maxDuration(unit);
   }
 
   private durationInSeconds(value: number, unit: DurationUnit): number {
@@ -283,51 +199,15 @@ export class App {
   }
 
   protected async saveIdentity(): Promise<void> {
-    const selected = this.permissions
-      .map((option) => ({
-        ...option,
-        verbs: this.verbs.filter((verb) => option.selected[verb]),
-        resourceNames:
-          option.resource === 'secrets'
-            ? option.resourceNamesInput
-                .split(',')
-                .map((name) => name.trim())
-                .filter(Boolean)
-            : [],
-      }))
-      .filter((option) => option.verbs.length > 0)
-      .map(({ apiGroup, resource, verbs, resourceNames, allSecrets }) => ({
-        apiGroup,
-        resource,
-        verbs,
-        ...(resource === 'secrets' && !allSecrets ? { resourceNames } : {}),
-      }));
-    if (selected.length === 0) {
-      this.formError.set('Selecione ao menos um recurso e verbo.');
-      return;
-    }
-    if (
-      selected.some(
-        (permission) =>
-          permission.resource === 'secrets' &&
-          permission.resourceNames !== undefined &&
-          permission.resourceNames.length === 0,
-      )
-    ) {
-      this.formError.set('Informe os nomes específicos das Secrets que poderão ser lidos.');
-      return;
-    }
-    if (this.targetNamespaces.length === 0) {
-      this.formError.set('Selecione ao menos um namespace de acesso.');
-      return;
-    }
+    const selected = this.permissionPolicy.toPermissions(this.permissions);
     const ttlSeconds = this.durationInSeconds(this.ttlValue, this.ttlUnit);
-    if (
-      !Number.isInteger(ttlSeconds) ||
-      ttlSeconds < MIN_TOKEN_TTL_SECONDS ||
-      ttlSeconds > MAX_TOKEN_TTL_DAYS * 24 * 60 * 60
-    ) {
-      this.formError.set('A duração deve estar entre 1 hora e 365 dias.');
+    const validationError = this.permissionPolicy.validate(
+      selected,
+      this.targetNamespaces.length,
+      ttlSeconds,
+    );
+    if (validationError) {
+      this.formError.set(validationError);
       return;
     }
     this.busy.set(true);
@@ -393,11 +273,7 @@ export class App {
     const target = this.issueTarget();
     if (!target) return;
     const ttlSeconds = this.durationInSeconds(this.issueDuration, this.issueUnit);
-    if (
-      !Number.isInteger(ttlSeconds) ||
-      ttlSeconds < MIN_TOKEN_TTL_SECONDS ||
-      ttlSeconds > MAX_TOKEN_TTL_DAYS * 24 * 60 * 60
-    ) {
+    if (!this.permissionPolicy.isValidDuration(ttlSeconds)) {
       this.issueError.set('A duração deve estar entre 1 hora e 365 dias.');
       return;
     }
@@ -433,9 +309,18 @@ export class App {
     return `${identity.namespace}/${identity.name}`;
   }
 
+  private async loadWorkspace(): Promise<void> {
+    const [namespaces, identities] = await Promise.all([this.api.namespaces(), this.api.list()]);
+    this.namespaces.set(namespaces);
+    this.identities.set(identities);
+    this.connected.set(true);
+  }
+
   private describeError(error: unknown): string {
     if (error instanceof HttpErrorResponse) {
-      return error.error?.error ?? `Falha na API (${error.status || 'rede'}).`;
+      return (
+        error.error?.error ?? `Falha ao consultar a API (${error.status || 'verifique a conexão'}).`
+      );
     }
     return error instanceof Error ? error.message : 'Não foi possível concluir a operação.';
   }
