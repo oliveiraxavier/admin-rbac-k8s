@@ -14,7 +14,6 @@ import { PermissionPolicy, PERMISSION_VERBS } from './permission-policy';
 })
 export class App implements OnInit {
   protected readonly authReady = signal(false);
-  protected readonly authMode = signal<AuthSession['provider']>('token');
   protected readonly authUser = signal<AuthSession['user']>(undefined);
   protected readonly connected = signal(false);
   protected readonly loading = signal(false);
@@ -30,7 +29,6 @@ export class App implements OnInit {
   protected readonly issueError = signal('');
   protected readonly notice = signal('');
   protected readonly filter = signal('');
-  protected apiKey = '';
   protected name = '';
   protected namespace = '';
   protected targetNamespaces: string[] = [];
@@ -51,10 +49,8 @@ export class App implements OnInit {
   async ngOnInit(): Promise<void> {
     try {
       const session = await this.api.session();
-      this.authMode.set(session.provider);
       this.authUser.set(session.user);
-      if (session.provider === 'authentik' && session.authenticated) {
-        this.api.connect();
+      if (session.authenticated) {
         await this.loadWorkspace();
       }
     } catch (error) {
@@ -64,41 +60,8 @@ export class App implements OnInit {
     }
   }
 
-  protected async connect(): Promise<void> {
-    const token = this.apiKey.trim();
-    if (!token) {
-      this.errorMessage.set('Informe o segredo da API.');
-      return;
-    }
-    this.errorMessage.set('');
-    this.loading.set(true);
-    this.api.connect(token);
-    try {
-      await this.loadWorkspace();
-    } catch (error) {
-      this.api.disconnect();
-      this.errorMessage.set(this.describeError(error));
-    } finally {
-      this.loading.set(false);
-    }
-  }
-
   protected disconnect(): void {
-    if (this.authMode() === 'authentik') {
-      window.location.assign('/auth/logout');
-      return;
-    }
-    this.api.disconnect();
-    this.connected.set(false);
-    this.identities.set([]);
-    this.namespaces.set([]);
-    this.apiKey = '';
-    this.tokenResult.set(null);
-    this.formOpen.set(false);
-    this.issueTarget.set(null);
-    this.errorMessage.set('');
-    this.formError.set('');
-    this.issueError.set('');
+    window.location.assign('/auth/logout');
   }
 
   protected login(): void {
@@ -351,12 +314,13 @@ export class App implements OnInit {
     this.namespaces.set(namespaces);
     this.identities.set(identities);
     this.connected.set(true);
-    this.apiKey = '';
   }
 
   private describeError(error: unknown): string {
     if (error instanceof HttpErrorResponse) {
-      return error.error?.error ?? `Falha na API (${error.status || 'rede'}).`;
+      return (
+        error.error?.error ?? `Falha ao consultar a API (${error.status || 'verifique a conexão'}).`
+      );
     }
     return error instanceof Error ? error.message : 'Não foi possível concluir a operação.';
   }

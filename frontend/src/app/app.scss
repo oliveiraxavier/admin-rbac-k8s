@@ -48,8 +48,6 @@
 .breadcrumb strong { color: #34413d; font-weight: 600; }
 .crumb-sep { color: #bac3be; }
 .topbar-actions { display: flex; align-items: center; gap: 11px; }
-.api-key-field input { width: 213px; height: 35px; padding: 0 11px; border: 1px solid #dfe6e2; border-radius: 5px; background: #fff; color: var(--ink); font-size: 11px; }
-.api-key-field input::placeholder { color: #9aa49f; }
 .connect-button, .primary-button { display: inline-flex; align-items: center; justify-content: center; gap: 13px; min-height: 38px; padding: 0 15px; border: 1px solid var(--forest); border-radius: 5px; color: #fff; background: var(--forest); font-size: 11px; font-weight: 600; transition: background .18s ease, transform .18s ease; }
 .connect-button { min-height: 35px; }
 .connect-button span, .primary-button > span:last-child { color: var(--lime); font-size: 15px; }
@@ -262,7 +260,6 @@ td { height: 75px; padding: 10px 14px; color: #394841; font-size: 10px; vertical
   .main-area { width: calc(100% - 62px); margin-left: 0; }
   .topbar { min-height: 58px; padding: 0 15px; }
   .breadcrumb { gap: 7px; font-size: 10px; }
-  .api-key-field input { width: min(35vw, 170px); }
   .connect-button { gap: 7px; padding: 0 9px; font-size: 10px; }
   .page-content { padding: 26px 15px 20px; }
   .page-heading { align-items: flex-start; flex-direction: column; margin-bottom: 20px; }
@@ -293,7 +290,6 @@ td { height: 75px; padding: 10px 14px; color: #394841; font-size: 10px; vertical
   .main-area { width: calc(100% - 48px); }
   .topbar { padding: 0 9px; }
   .topbar-actions { gap: 5px; }
-  .api-key-field input { width: 116px; height: 32px; padding: 0 7px; font-size: 9px; }
   .connect-button { min-height: 32px; }
   .connection-state { max-width: 110px; gap: 5px; font-size: 9px; }
   .quiet-button { padding: 0 6px; font-size: 9px; }

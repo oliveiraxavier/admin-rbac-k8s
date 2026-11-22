@@ -60,6 +60,20 @@ func TestAuthenticateValidatesSignedSessionAndExpiry(t *testing.T) {
 	}
 }
 
+func TestAuthenticateRejectsBearerTokenWithoutSessionCookie(t *testing.T) {
+	auth := &Authenticator{sessionSecret: []byte("a session signing key with enough entropy")}
+	handler := auth.Authenticate(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/tokens", nil)
+	request.Header.Set("Authorization", "Bearer legacy-admin-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("expected bearer-only request to be rejected with %d, got %d", http.StatusUnauthorized, response.Code)
+	}
+}
+
 func TestLoginUsesStateNonceAndPKCE(t *testing.T) {
 	auth := &Authenticator{
 		oauthConfig: oauth2.Config{
@@ -133,6 +147,16 @@ func TestAllowedGroupRequiresMembership(t *testing.T) {
 	}
 	if hasAllowedGroup([]string{"developers"}, []string{"admins"}) {
 		t.Fatal("expected non-matching group to be rejected")
+	}
+}
+
+func TestEmptyAllowedGroupsDefaultToAuthentikAdmins(t *testing.T) {
+	allowedGroups := effectiveAllowedGroups(nil)
+	if !hasAllowedGroup([]string{"authentik Admins"}, allowedGroups) {
+		t.Fatal("expected Authentik admins to be authorized by default")
+	}
+	if hasAllowedGroup([]string{"developers"}, allowedGroups) {
+		t.Fatal("expected users outside the default group to be rejected")
 	}
 }
 

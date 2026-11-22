@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -15,25 +14,22 @@ import (
 
 type api struct {
 	client        kubernetes.Interface
-	adminToken    string
 	authenticator *authentik.Authenticator
 	namespaces    map[string]struct{}
 }
 
-func NewHandler(client kubernetes.Interface, token string, namespaces []string, authenticators ...*authentik.Authenticator) http.Handler {
-	app := newAPI(client, token, namespaces)
-	if len(authenticators) > 0 {
-		app.authenticator = authenticators[0]
-	}
+func NewHandler(client kubernetes.Interface, namespaces []string, authenticator *authentik.Authenticator) http.Handler {
+	app := newAPI(client, namespaces)
+	app.authenticator = authenticator
 	return app.routes()
 }
 
-func newAPI(client kubernetes.Interface, token string, namespaces []string) *api {
+func newAPI(client kubernetes.Interface, namespaces []string) *api {
 	allowed := make(map[string]struct{}, len(namespaces))
 	for _, namespace := range namespaces {
 		allowed[namespace] = struct{}{}
 	}
-	return &api{client: client, adminToken: token, namespaces: allowed}
+	return &api{client: client, namespaces: allowed}
 }
 
 func (a *api) routes() http.Handler {
@@ -43,19 +39,19 @@ func (a *api) routes() http.Handler {
 	})
 	mux.HandleFunc("GET /openapi.yaml", openAPIDocument)
 	mux.HandleFunc("GET /docs", swaggerUI)
-	if a.authenticator != nil {
-		a.authenticator.RegisterRoutes(mux)
-		mux.Handle("GET /api/v1/namespaces", a.authenticator.Authenticate(http.HandlerFunc(a.listNamespaces)))
-		mux.Handle("/api/v1/tokens", a.authenticator.Authenticate(http.HandlerFunc(a.collection)))
-		mux.Handle("/api/v1/tokens/", a.authenticator.Authenticate(http.HandlerFunc(a.item)))
+	if a.authenticator == nil {
+		unavailable := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, http.StatusServiceUnavailable, "Authentik authentication is not configured")
+		})
+		mux.Handle("GET /api/v1/namespaces", unavailable)
+		mux.Handle("/api/v1/tokens", unavailable)
+		mux.Handle("/api/v1/tokens/", unavailable)
 		return mux
 	}
-	mux.HandleFunc("GET /auth/session", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"provider": "token", "authenticated": false})
-	})
-	mux.Handle("GET /api/v1/namespaces", a.authenticate(http.HandlerFunc(a.listNamespaces)))
-	mux.Handle("/api/v1/tokens", a.authenticate(http.HandlerFunc(a.collection)))
-	mux.Handle("/api/v1/tokens/", a.authenticate(http.HandlerFunc(a.item)))
+	a.authenticator.RegisterRoutes(mux)
+	mux.Handle("GET /api/v1/namespaces", a.authenticator.Authenticate(http.HandlerFunc(a.listNamespaces)))
+	mux.Handle("/api/v1/tokens", a.authenticator.Authenticate(http.HandlerFunc(a.collection)))
+	mux.Handle("/api/v1/tokens/", a.authenticator.Authenticate(http.HandlerFunc(a.item)))
 
 	return mux
 }
@@ -67,17 +63,6 @@ func (a *api) listNamespaces(w http.ResponseWriter, _ *http.Request) {
 	}
 	slices.Sort(namespaces)
 	writeJSON(w, http.StatusOK, namespaces)
-}
-
-func (a *api) authenticate(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if provided == r.Header.Get("Authorization") || subtle.ConstantTimeCompare([]byte(provided), []byte(a.adminToken)) != 1 {
-			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func (a *api) collection(w http.ResponseWriter, r *http.Request) {

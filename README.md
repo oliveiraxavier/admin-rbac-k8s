@@ -9,15 +9,14 @@ Painel local para criar e administrar identidades de acesso Kubernetes com permi
 - O painel mostra e administra os bindings que ele próprio gerencia. Permissões adicionadas manualmente à mesma ServiceAccount fora do painel podem ampliar o acesso e não aparecem nesta matriz.
 - Tokens têm validade solicitada entre 10 minutos e 365 dias. Se `ttlSeconds` for omitido na API, o backend usa 365 dias; isso não cria um token sem expiração. O API server pode aplicar uma duração menor. O valor é mostrado uma única vez; para obter outro, emita um novo token.
 - Editar permissões atualiza a Role vinculada à ServiceAccount. A mudança afeta os tokens dessa identidade.
-- O login principal pode usar Authentik via OpenID Connect. O backend valida a identidade e mantém uma sessão assinada em cookie `HttpOnly`; a chave compartilhada continua disponível somente como modo legado quando OIDC não está configurado.
+- O login usa Authentik via OpenID Connect. O backend valida a identidade e mantém uma sessão assinada em cookie `HttpOnly`.
 
 ## Onde os dados são salvos
 
 - **No cluster Kubernetes (etcd):** a `ServiceAccount` fica no namespace de origem escolhido. Para cada namespace de acesso, o backend cria uma `Role` e uma `RoleBinding` namespaced que referencia essa ServiceAccount. Esses objetos persistem no cluster e podem ser inspecionados com `kubectl`.
 - **Namespaces e permissões:** não há banco de dados próprio. O painel reconstrói os namespaces de acesso lendo os `RoleBindings` gerenciados; as regras ficam nas `Roles` correspondentes.
 - **Token Kubernetes emitido:** a API `TokenRequest` devolve um JWT temporário, mas o backend não o grava em um `Secret` nem em banco. O frontend o mantém em memória para exibição única; fechar a janela/aba descarta a cópia do painel.
-- **Sessão do painel:** no modo Authentik, o navegador recebe um cookie de sessão `HttpOnly`, assinado pelo backend e válido por até oito horas (ou até o vencimento do ID token). O segredo de assinatura fica apenas em `AUTHENTIK_SESSION_SECRET`; tokens de acesso do Authentik não são armazenados no navegador.
-- **Modo legado:** `ADMIN_API_TOKEN` mantém a autenticação compartilhada anterior apenas quando as variáveis OIDC não estão configuradas.
+- **Sessão do painel:** o navegador recebe um cookie de sessão `HttpOnly`, assinado pelo backend e válido por até oito horas (ou até o vencimento do ID token). O segredo de assinatura fica apenas em `AUTHENTIK_SESSION_SECRET`; tokens de acesso do Authentik não são armazenados no navegador.
 
 ## Verbos e subrecursos
 
@@ -32,23 +31,23 @@ Painel local para criar e administrar identidades de acesso Kubernetes com permi
 - Node.js 26 (`nvm use` usa o `.nvmrc`)
 - Acesso a um cluster Kubernetes por `KUBECONFIG` ou configuração in-cluster
 
-O usuário Kubernetes do backend precisa operar ServiceAccounts e criar TokenRequests nos namespaces configurados, além de criar/ler/atualizar/excluir Roles e RoleBindings. Para RBAC dinâmico, o Kubernetes também pode exigir os verbos `escalate` em Roles e `bind` nos papéis referenciados. Esses privilégios são sensíveis: limite o backend a namespaces dedicados e revise cuidadosamente os usuários com acesso à chave administrativa.
+O usuário Kubernetes do backend precisa operar ServiceAccounts e criar TokenRequests nos namespaces configurados, além de criar/ler/atualizar/excluir Roles e RoleBindings. Para RBAC dinâmico, o Kubernetes também pode exigir os verbos `escalate` em Roles e `bind` nos papéis referenciados. Esses privilégios são sensíveis: limite o backend a namespaces dedicados e revise cuidadosamente quem pertence aos grupos Authentik autorizados.
 
 ## Executar localmente
 
 Terminal 1, na raiz do projeto:
 
 ```sh
-cp .env.example .env
-# Defina ADMIN_API_TOKEN em .env usando a saída de: openssl rand -hex 32
+cp backend/.env.example backend/.env
+# Configure as variáveis AUTHENTIK_* conforme a seção "Login com Authentik".
 set -a
-. ./.env
+. ./backend/.env
 set +a
 cd backend
 go run ./cmd/server
 ```
 
-Informe o valor de `ADMIN_API_TOKEN` no campo Segredo da API do painel. O arquivo `.env` é local e não deve ser commitado.
+O backend exige uma configuração OIDC Authentik completa e não aceita segredo compartilhado para autenticar requisições. O arquivo `.env` é local e não deve ser commitado.
 
 Terminal 2:
 
@@ -59,7 +58,7 @@ npm install
 npm start
 ```
 
-Abra http://localhost:4200. O servidor Angular encaminha `/api` para `127.0.0.1:8080` durante o desenvolvimento.
+Abra <http://localhost:4200>. O servidor Angular encaminha `/api` para `127.0.0.1:8080` durante o desenvolvimento.
 
 ## Login com Authentik
 
@@ -73,23 +72,38 @@ repositório:
 ```
 
 Na primeira execução, o script gera segredos fortes e grava-os em
-`authentik/.env` (ignorado pelo Git). Ele também limita o serviço a
-`127.0.0.1:9000`, acessível apenas na máquina local. **Execute o script somente
-na primeira configuração:** ele substitui `authentik/.env`. Para iniciar
-novamente uma instância já configurada, use:
+`authentik/.env` (ignorado pelo Git). Nas execuções seguintes, ele preserva
+esse arquivo para manter as credenciais alinhadas ao volume persistente do
+PostgreSQL. O serviço fica limitado a `127.0.0.1:9000`, acessível apenas na
+máquina local. Para iniciar novamente uma instância já configurada, use:
 
 ```sh
-cd authentik
-docker compose up -d
+. ./authentik/start-authentik.sh
 ```
 
-Para parar os serviços sem apagar os dados, execute `docker compose stop` no
-diretório `authentik`. Não remova o volume `database` se quiser preservar a
+Ou
+
+```sh
+bash authentik/start-authentik.sh
+```
+
+Para parar os serviços sem apagar os dados, execute:
+
+```sh
+. ./authentik/stop-authentik.sh
+```
+
+Ou
+
+```sh
+bash authentik/stop-authentik.sh
+```
+
+Não remova o volume `database` se quiser preservar a
 configuração e os dados do Authentik.
 
-Na primeira configuração, abra
-http://localhost:9000/if/flow/initial-setup/ e defina a senha da conta
-administrativa inicial do Authentik.
+Na primeira configuração, abra <http://localhost:9000/if/flow/initial-setup/>
+e defina a senha da conta administrativa inicial do Authentik.
 
 ### Configurar login OIDC
 
@@ -107,8 +121,9 @@ Crie uma aplicação com provedor OAuth2/OpenID Connect:
 - Copie o issuer URL, o client ID e o client secret do provedor.
 
 Configure o backend com os dados do provedor. `AUTHENTIK_ALLOWED_GROUPS`
-adiciona a verificação do grupo no próprio backend; o nome deve corresponder
-exatamente ao valor presente no claim `groups`:
+substitui o grupo padrão quando preenchido; os nomes devem corresponder
+exatamente aos valores presentes no claim `groups`. Se vazio, o backend exige
+o grupo `authentik Admins`:
 
 ```sh
 export AUTHENTIK_ISSUER_URL="http://localhost:9000/application/o/<slug-da-aplicacao>/"
@@ -122,7 +137,7 @@ cd backend
 go run ./cmd/server
 ```
 
-Use o issuer URL exato apresentado pelo Authentik. Em produção, configure HTTPS para o issuer e para a aplicação; o backend exige HTTPS no redirect fora de `localhost`. Opcionalmente, `AUTHENTIK_ALLOWED_GROUPS` aceita uma lista separada por vírgulas. Para restringir grupos, inclua um claim `groups` no ID token do provedor. Quando OIDC está configurado, `ADMIN_API_TOKEN` não autentica requisições.
+Use o issuer URL exato apresentado pelo Authentik. Em produção, configure HTTPS para o issuer e para a aplicação; o backend exige HTTPS no redirect fora de `localhost`. `AUTHENTIK_ALLOWED_GROUPS` aceita uma lista de grupos separada por vírgulas; se estiver vazia, o backend exige o grupo `authentik Admins`. Em ambos os casos, inclua um claim `groups` no ID token do provedor com os nomes exatos dos grupos.
 
 Use as duas restrições — acesso à aplicação no Authentik e
 `AUTHENTIK_ALLOWED_GROUPS` no backend — para garantir que somente
@@ -149,7 +164,7 @@ Se a formatação alterar um arquivo Go staged, o hook interrompe o commit para 
 
 - `GET /healthz`: verificação de saúde sem autenticação.
 - `GET /auth/login`, `GET /auth/callback`, `GET /auth/logout`: fluxo OIDC de login e logout quando Authentik está configurado.
-- `GET /auth/session`: informa o modo de autenticação e o estado da sessão para a interface.
+- `GET /auth/session`: informa o estado da sessão para a interface.
 - `GET /api/v1/namespaces`: namespaces permitidos.
 - `GET /api/v1/tokens`: identidades gerenciadas e permissões.
 - `POST /api/v1/tokens`: cria ServiceAccount, Role e RoleBinding em cada namespace selecionado, e emite o token inicial.
@@ -157,7 +172,7 @@ Se a formatação alterar um arquivo Go staged, o hook interrompe o commit para 
 - `POST /api/v1/tokens/{namespace}/{name}/issue`: emite um novo token temporário.
 - `DELETE /api/v1/tokens/{namespace}/{name}`: remove a identidade e os objetos RBAC associados.
 
-Os endpoints `/api` exigem uma sessão Authentik quando OIDC está configurado. No modo legado, exigem `Authorization: Bearer <ADMIN_API_TOKEN>`.
+Todos os endpoints `/api` exigem uma sessão Authentik válida.
 
 ## Produção
 

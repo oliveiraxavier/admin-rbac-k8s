@@ -18,7 +18,6 @@ import (
 )
 
 func main() {
-	adminToken := os.Getenv("ADMIN_API_TOKEN")
 	authConfig := authentik.Config{
 		IssuerURL:     os.Getenv("AUTHENTIK_ISSUER_URL"),
 		ClientID:      os.Getenv("AUTHENTIK_CLIENT_ID"),
@@ -27,18 +26,9 @@ func main() {
 		SessionSecret: os.Getenv("AUTHENTIK_SESSION_SECRET"),
 		AllowedGroups: splitList(os.Getenv("AUTHENTIK_ALLOWED_GROUPS")),
 	}
-	oidcConfigured := authConfig.IssuerURL != "" || authConfig.ClientID != "" ||
-		authConfig.ClientSecret != "" || authConfig.RedirectURL != "" || authConfig.SessionSecret != "" ||
-		len(authConfig.AllowedGroups) > 0
-	var authenticator *authentik.Authenticator
-	if oidcConfigured {
-		var authErr error
-		authenticator, authErr = authentik.New(context.Background(), authConfig)
-		if authErr != nil {
-			log.Fatalf("configure Authentik login: %v", authErr)
-		}
-	} else if len(adminToken) < 32 {
-		log.Fatal("set Authentik OIDC configuration or provide ADMIN_API_TOKEN with at least 32 characters")
+	authenticator, err := authentik.New(context.Background(), authConfig)
+	if err != nil {
+		log.Fatalf("configure Authentik login: %v", err)
 	}
 
 	namespaces := splitList(os.Getenv("TARGET_NAMESPACES"))
@@ -57,7 +47,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              envOr("LISTEN_ADDR", "127.0.0.1:8080"),
-		Handler:           api.NewHandler(client, adminToken, namespaces, authenticator),
+		Handler:           api.NewHandler(client, namespaces, authenticator),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	log.Printf("Kubernetes access manager listening on %s", server.Addr)

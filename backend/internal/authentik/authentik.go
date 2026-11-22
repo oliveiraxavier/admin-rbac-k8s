@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	sessionCookieName = "kubeaccess_session"
-	stateCookieName   = "kubeaccess_oidc_state"
-	sessionDuration   = 8 * time.Hour
-	stateDuration     = 10 * time.Minute
+	sessionCookieName          = "kubeaccess_session"
+	stateCookieName            = "kubeaccess_oidc_state"
+	sessionDuration            = 8 * time.Hour
+	stateDuration              = 10 * time.Minute
+	defaultAuthentikAdminGroup = "authentik Admins"
 )
 
 type Config struct {
@@ -57,6 +58,7 @@ type loginState struct {
 	Nonce     string `json:"nonce"`
 	Verifier  string `json:"verifier"`
 	ExpiresAt int64  `json:"exp"`
+	ReturnTo  string `json:"return_to,omitempty"`
 }
 
 type Authenticator struct {
@@ -112,7 +114,7 @@ func New(ctx context.Context, config Config) (*Authenticator, error) {
 		},
 		verifier:      provider.Verifier(&oidc.Config{ClientID: config.ClientID}),
 		sessionSecret: []byte(config.SessionSecret),
-		allowedGroups: slices.Clone(config.AllowedGroups),
+		allowedGroups: effectiveAllowedGroups(config.AllowedGroups),
 		secureCookies: redirectURL.Scheme == "https",
 	}, nil
 }
@@ -156,7 +158,14 @@ func (a *Authenticator) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not start authentication", http.StatusInternalServerError)
 		return
 	}
-	payload := loginState{State: state, Nonce: nonce, Verifier: verifier, ExpiresAt: time.Now().Add(stateDuration).Unix()}
+	returnTo := r.URL.Query().Get("return_to")
+	if returnTo == "" || !strings.HasPrefix(returnTo, "/") || strings.HasPrefix(returnTo, "//") {
+		returnTo = "/"
+	}
+	payload := loginState{
+		State: state, Nonce: nonce, Verifier: verifier,
+		ExpiresAt: time.Now().Add(stateDuration).Unix(), ReturnTo: returnTo,
+	}
 	value, err := a.encodeSigned(payload)
 	if err != nil {
 		http.Error(w, "could not start authentication", http.StatusInternalServerError)
@@ -239,7 +248,11 @@ func (a *Authenticator) callback(w http.ResponseWriter, r *http.Request) {
 		Name: sessionCookieName, Value: value, Path: "/", Expires: expiresAt,
 		HttpOnly: true, Secure: a.secureCookies, SameSite: http.SameSiteLaxMode,
 	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	returnTo := "/"
+	if state.ReturnTo != "" && strings.HasPrefix(state.ReturnTo, "/") && !strings.HasPrefix(state.ReturnTo, "//") {
+		returnTo = state.ReturnTo
+	}
+	http.Redirect(w, r, returnTo, http.StatusSeeOther)
 }
 
 func (a *Authenticator) logout(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +319,13 @@ func hasAllowedGroup(userGroups, allowedGroups []string) bool {
 		}
 	}
 	return false
+}
+
+func effectiveAllowedGroups(groups []string) []string {
+	if len(groups) == 0 {
+		return []string{defaultAuthentikAdminGroup}
+	}
+	return slices.Clone(groups)
 }
 
 func validateEndpoint(value string) error {

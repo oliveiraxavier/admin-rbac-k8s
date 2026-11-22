@@ -15,38 +15,19 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
-func TestAuthenticationRequired(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+func TestProtectedRoutesFailClosedWithoutAuthentik(t *testing.T) {
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/tokens", nil)
+	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	response := httptest.NewRecorder()
 	app.routes().ServeHTTP(response, request)
-	if response.Code != http.StatusUnauthorized {
-		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, response.Code)
-	}
-}
-
-func TestAuthSessionReportsLegacyMode(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
-	request := httptest.NewRequest(http.MethodGet, "/auth/session", nil)
-	response := httptest.NewRecorder()
-	app.routes().ServeHTTP(response, request)
-	if response.Code != http.StatusOK {
-		t.Fatalf("expected status %d, got %d", http.StatusOK, response.Code)
-	}
-	var session struct {
-		Provider      string `json:"provider"`
-		Authenticated bool   `json:"authenticated"`
-	}
-	if err := json.Unmarshal(response.Body.Bytes(), &session); err != nil {
-		t.Fatalf("decode session response: %v", err)
-	}
-	if session.Provider != "token" || session.Authenticated {
-		t.Fatalf("expected unauthenticated legacy mode, got %#v", session)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected unavailable status %d without Authentik, got %d", http.StatusServiceUnavailable, response.Code)
 	}
 }
 
 func TestOpenAPIDocumentationRoutes(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 
 	request := httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil)
 	response := httptest.NewRecorder()
@@ -59,6 +40,9 @@ func TestOpenAPIDocumentationRoutes(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "openapi: 3.0.3") {
 		t.Fatal("expected OpenAPI 3 document")
+	}
+	if strings.Contains(response.Body.String(), "AdminBearerAuth") {
+		t.Fatal("OpenAPI document must not advertise bearer authentication")
 	}
 	jsonSpec, err := utilyaml.ToJSON(openAPISpec)
 	if err != nil {
@@ -115,18 +99,17 @@ func TestValidateNamespaceTargets(t *testing.T) {
 }
 
 func TestPermissionValidationRejectsEscalation(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/tokens", strings.NewReader(`{"name":"viewer","namespace":"team-a","ttlSeconds":3600,"permissions":[{"apiGroup":"","resource":"secrets","verbs":["get"]}]}`))
-	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	response := httptest.NewRecorder()
-	app.routes().ServeHTTP(response, request)
+	app.collection(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, response.Code)
 	}
 }
 
 func TestPermissionValidationAllowsDeletePodsOnly(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	response := httptest.NewRecorder()
 	if !app.validate(response, "operator", "team-a", 3600, []permission{{APIGroup: "", Resource: "pods", Verbs: []string{"delete"}}}) {
 		t.Fatalf("expected delete pods to be allowed, got %d: %s", response.Code, response.Body.String())
@@ -141,7 +124,7 @@ func TestPermissionValidationAllowsDeletePodsOnly(t *testing.T) {
 }
 
 func TestPermissionValidationAllowsPodLogsOnlyWithGet(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	response := httptest.NewRecorder()
 	if !app.validate(response, "viewer", "team-a", 3600, []permission{{APIGroup: "", Resource: "pods/log", Verbs: []string{"get"}}}) {
 		t.Fatalf("expected get pods/log to be allowed, got %d: %s", response.Code, response.Body.String())
@@ -154,7 +137,7 @@ func TestPermissionValidationAllowsPodLogsOnlyWithGet(t *testing.T) {
 }
 
 func TestPermissionValidationAllowsPodExecOnlyWithCreate(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	response := httptest.NewRecorder()
 	if !app.validate(response, "operator", "team-a", 3600, []permission{{APIGroup: "", Resource: "pods/exec", Verbs: []string{"create"}}}) {
 		t.Fatalf("expected create pods/exec to be allowed, got %d: %s", response.Code, response.Body.String())
@@ -175,7 +158,7 @@ func TestPermissionValidationAllowsPodExecOnlyWithCreate(t *testing.T) {
 }
 
 func TestSecretPermissionsSupportNamedAndAllSecretsModes(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	secretPermission := permission{APIGroup: "", Resource: "secrets", Verbs: []string{"get"}, ResourceNames: []string{"db-credentials", "registry-auth"}}
 	response := httptest.NewRecorder()
 	if !app.validate(response, "viewer", "team-a", 3600, []permission{secretPermission}) {
@@ -235,7 +218,7 @@ func TestSecretResourceNamesSurviveRoleRoundTrip(t *testing.T) {
 }
 
 func TestTokenTTLAllowsOneYearAndRejectsMore(t *testing.T) {
-	app := newAPI(fake.NewSimpleClientset(), "01234567890123456789012345678901", []string{"team-a"})
+	app := newAPI(fake.NewSimpleClientset(), []string{"team-a"})
 	permissions := []permission{{APIGroup: "", Resource: "pods", Verbs: []string{"get"}}}
 	response := httptest.NewRecorder()
 	if !app.validate(response, "viewer", "team-a", maximumTTL, permissions) {
@@ -260,7 +243,7 @@ func TestOmittedTokenTTLDefaultsToOneYear(t *testing.T) {
 
 func TestIdentityCanHaveRoleBindingsInMultipleNamespaces(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	app := newAPI(client, "01234567890123456789012345678901", []string{"identity-ns", "team-a", "team-b"})
+	app := newAPI(client, []string{"identity-ns", "team-a", "team-b"})
 	permissions := []permission{{APIGroup: "", Resource: "pods", Verbs: []string{"get", "list"}}}
 	account := &corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: "viewer", Namespace: "identity-ns"}}
 
@@ -290,7 +273,7 @@ func TestUpdateAndDeleteIdentityAcrossNamespaces(t *testing.T) {
 		Name: "viewer", Namespace: "identity-ns", Labels: map[string]string{managedLabel: managedValue},
 	}}
 	client := fake.NewSimpleClientset(account)
-	app := newAPI(client, "01234567890123456789012345678901", []string{"identity-ns", "team-a", "team-b"})
+	app := newAPI(client, []string{"identity-ns", "team-a", "team-b"})
 	permissions := []permission{{APIGroup: "", Resource: "pods", Verbs: []string{"get"}}}
 	for _, namespace := range []string{"team-a", "team-b"} {
 		if _, _, err := app.createScope(context.Background(), account.Name, account.Namespace, namespace, permissions); err != nil {
@@ -299,9 +282,8 @@ func TestUpdateAndDeleteIdentityAcrossNamespaces(t *testing.T) {
 	}
 
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/tokens/identity-ns/viewer", strings.NewReader(`{"targetNamespaces":["team-b"],"permissions":[{"apiGroup":"","resource":"pods","verbs":["get","list"]}]}`))
-	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	response := httptest.NewRecorder()
-	app.routes().ServeHTTP(response, request)
+	app.item(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("update returned status %d: %s", response.Code, response.Body.String())
 	}
@@ -314,9 +296,8 @@ func TestUpdateAndDeleteIdentityAcrossNamespaces(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodDelete, "/api/v1/tokens/identity-ns/viewer", nil)
-	request.Header.Set("Authorization", "Bearer 01234567890123456789012345678901")
 	response = httptest.NewRecorder()
-	app.routes().ServeHTTP(response, request)
+	app.item(response, request)
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("delete returned status %d: %s", response.Code, response.Body.String())
 	}

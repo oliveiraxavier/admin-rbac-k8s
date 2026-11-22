@@ -27,16 +27,15 @@ describe('AccessApi', () => {
     sessionRequest.flush({ provider: 'authentik', authenticated: true, user: { email: 'admin@example.com' } });
     await expect(sessionPromise).resolves.toMatchObject({ provider: 'authentik' });
 
-    api.connect('secret');
     const namespacesPromise = api.namespaces();
     const namespacesRequest = http.expectOne('/api/v1/namespaces');
-    expect(namespacesRequest.request.headers.get('Authorization')).toBe('Bearer secret');
+    expect(namespacesRequest.request.headers.has('Authorization')).toBe(false);
+    expect(namespacesRequest.request.withCredentials).toBe(true);
     namespacesRequest.flush(['default', 'apps']);
     await expect(namespacesPromise).resolves.toEqual(['default', 'apps']);
   });
 
   it('creates an identity and sends the payload', async () => {
-    api.connect('secret');
     const identity: Identity = {
       name: 'reader',
       namespace: 'apps',

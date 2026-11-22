@@ -37,20 +37,12 @@
       <div class="topbar-actions">
         @if (connected()) {
           <span class="connection-state"><i></i>{{ authUser()?.email || 'Conectado' }}</span>
-          <button class="quiet-button" type="button" (click)="disconnect()">{{ authMode() === 'authentik' ? 'Sair' : 'Desconectar' }}</button>
+          <button class="quiet-button" type="button" (click)="disconnect()">Sair</button>
         } @else if (!authReady()) {
           <button class="connect-button" type="button" disabled>Verificando...</button>
-        } @else if (authMode() === 'authentik') {
+        } @else {
           <button class="connect-button" type="button" (click)="login()">
             Entrar com Authentik <span aria-hidden="true">↗</span>
-          </button>
-        } @else {
-          <label class="api-key-field">
-            <span class="sr-only">Segredo da API</span>
-            <input [(ngModel)]="apiKey" type="password" placeholder="Segredo da API" autocomplete="off" (keydown.enter)="connect()" />
-          </label>
-          <button class="connect-button" type="button" (click)="connect()" [disabled]="loading()">
-            {{ loading() ? 'Conectando...' : 'Conectar' }} <span aria-hidden="true">↗</span>
           </button>
         }
       </div>
@@ -115,11 +107,9 @@
         } @else if (!connected()) {
           <div class="empty-state">
             <div class="empty-art" aria-hidden="true"><span></span><span></span><span></span></div>
-            <h3>{{ authMode() === 'authentik' ? 'Entre para continuar' : 'Conecte-se ao backend' }}</h3>
-            <p>{{ authMode() === 'authentik' ? 'Autentique-se com sua conta Authentik para carregar as identidades gerenciadas.' : 'Informe o segredo de administração configurado no serviço para carregar as identidades gerenciadas.' }}</p>
-            @if (authMode() === 'authentik') {
-              <button class="text-action" type="button" (click)="login()">Entrar com Authentik <span>↗</span></button>
-            }
+            <h3>Entre para continuar</h3>
+            <p>Autentique-se com sua conta Authentik para carregar as identidades gerenciadas.</p>
+            <button class="text-action" type="button" (click)="login()">Entrar com Authentik <span>↗</span></button>
           </div>
         } @else if (loading() && identities().length === 0) {
           <div class="empty-state"><div class="loader"></div><h3>Carregando identidades</h3></div>
