@@ -1,4 +1,4 @@
-module k8s-admin-rbac
+module admin-rbac-k8s
 
 go 1.24.0
 
